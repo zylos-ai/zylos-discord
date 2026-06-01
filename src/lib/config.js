@@ -11,6 +11,7 @@ import path from 'node:path';
 const HOME = process.env.HOME;
 export const DATA_DIR = path.join(HOME, 'zylos/components/discord');
 export const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+const ENV_PATH = path.join(HOME, 'zylos/.env');
 
 // Default configuration
 export const DEFAULT_CONFIG = {
@@ -30,6 +31,31 @@ export const DEFAULT_CONFIG = {
 let config = null;
 let configWatcher = null;
 let configReloadTimer = null;
+
+function loadDotEnv() {
+  try {
+    if (!fs.existsSync(ENV_PATH)) return;
+    const content = fs.readFileSync(ENV_PATH, 'utf8');
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx <= 0) continue;
+      const key = trimmed.slice(0, idx).trim();
+      if (!key || process.env[key] !== undefined) continue;
+      let value = trimmed.slice(idx + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+    }
+  } catch (err) {
+    console.warn(`[discord] Failed to load ${ENV_PATH}: ${err.message}`);
+  }
+}
 
 function deepMerge(defaults, overrides = {}) {
   const result = { ...defaults };
@@ -67,6 +93,7 @@ export function mergeConfigWithDefaults(parsed = {}) {
  * @returns {Object} Configuration object
  */
 export function loadConfig() {
+  loadDotEnv();
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const content = fs.readFileSync(CONFIG_PATH, 'utf8');

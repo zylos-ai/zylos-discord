@@ -81,6 +81,18 @@ describe('config', () => {
     expect(mod.getApplicationId()).toBe('app-env');
   });
 
+  it('loads environment credentials from ~/zylos/.env', async () => {
+    const home = makeHome();
+    fs.mkdirSync(path.join(home, 'zylos'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'zylos/.env'), 'DISCORD_BOT_TOKEN=from-dotenv\nDISCORD_APPLICATION_ID=\"app-dotenv\"\n');
+    delete process.env.DISCORD_BOT_TOKEN;
+    delete process.env.DISCORD_APPLICATION_ID;
+    const mod = await importConfig(home);
+
+    expect(mod.getBotToken()).toBe('from-dotenv');
+    expect(mod.getApplicationId()).toBe('app-dotenv');
+  });
+
   it('prefers config credentials over environment credentials', async () => {
     const home = makeHome();
     process.env.DISCORD_BOT_TOKEN = 'from-env';

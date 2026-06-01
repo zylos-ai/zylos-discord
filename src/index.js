@@ -6,8 +6,12 @@
  */
 
 import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
-import { DATA_DIR, getBotToken, getConfig, watchConfig } from './lib/config.js';
+import { bindOwnerIfUnset, hasOwner, isDmAuthorized } from './lib/auth.js';
+import { buildEndpoint, formatDmMessage, sendToC4 } from './lib/c4.js';
+import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig } from './lib/config.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
+import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
+import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib/recording.js';
 
 const LOG = '[discord]';
 
@@ -52,7 +56,12 @@ async function main() {
 
   client.on(Events.MessageCreate, (message) => {
     if (isSelfOrBotMessage(message, client.user?.id)) return;
-    // Slice 2: route DMs and guild messages to C4.
+    if (message.channel?.isDMBased?.()) {
+      handleDirectMessage(message).catch((err) => {
+        console.error(`${LOG} DM handler failed: ${err.message}`);
+      });
+    }
+    // Slice 3: route guild messages.
   });
 
   client.on(Events.Error, (err) => {
@@ -84,6 +93,8 @@ async function main() {
     }
   });
 
+  startRecordingServer({ port: config.internalPort || 3475 });
+
   try {
     await client.login(token);
   } catch (err) {
@@ -93,12 +104,70 @@ async function main() {
   }
 }
 
+async function handleDirectMessage(message) {
+  let config = loadConfig();
+  const userId = String(message.author.id);
+  const username = message.author.username || message.author.globalName || userId;
+  const text = message.content || '';
+
+  if (!hasOwner(config)) {
+    bindOwnerIfUnset(config, userId);
+    if (!saveConfig(config)) {
+      await message.reply('Internal error, please try again.').catch(() => {});
+      return;
+    }
+    await message.reply('You are now the owner (admin) of this bot.').catch(() => {});
+  }
+
+  if (!text.trim()) {
+    await message.reply('Attachments are not supported yet. Please send text.').catch(() => {});
+    return;
+  }
+
+  config = loadConfig();
+  if (!isDmAuthorized(config, userId)) {
+    await message.reply('Sorry, this bot is private.').catch(() => {});
+    return;
+  }
+
+  const correlationId = `${message.channel.id}:${message.id}`;
+  const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId });
+
+  try {
+    recordIncoming({
+      channelId: message.channel.id,
+      userId,
+      username,
+      text,
+      messageId: message.id
+    });
+  } catch (err) {
+    console.warn(`${LOG} failed to record incoming DM: ${err.message}`);
+  }
+
+  await setReaction(message);
+  startTyping(message.channel, correlationId);
+
+  const content = formatDmMessage({ username, text });
+  sendToC4('discord', endpoint, content, async (errMsg) => {
+    stopTyping(correlationId);
+    await clearReaction(message);
+    await message.reply(errMsg).catch(() => {});
+  });
+}
+
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`${LOG} Shutting down...`);
   try {
     configWatcherStop?.();
+  } catch {}
+  try {
+    stopAllTyping();
+  } catch {}
+  try {
+    stopRecordingServer();
   } catch {}
   try {
     client?.destroy();
