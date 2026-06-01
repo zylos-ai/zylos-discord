@@ -6,7 +6,7 @@
  */
 
 import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
-import { DATA_DIR, getBotToken, getConfig, stopWatching, watchConfig } from './lib/config.js';
+import { DATA_DIR, getBotToken, getConfig, watchConfig } from './lib/config.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
 
 const LOG = '[discord]';
@@ -82,7 +82,7 @@ async function main() {
       console.log(`${LOG} Component disabled, stopping...`);
       shutdown(0);
     }
-  }) || stopWatching;
+  });
 
   try {
     await client.login(token);
