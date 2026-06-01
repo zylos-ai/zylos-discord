@@ -1,0 +1,35 @@
+{
+  "name": "zylos-discord",
+  "version": "0.1.0",
+  "description": "Discord bot channel for Zylos agents",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "vitest run"
+  },
+  "homepage": "https://github.com/zylos-ai/zylos-discord#readme",
+  "bugs": {
+    "url": "https://github.com/zylos-ai/zylos-discord/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zylos-ai/zylos-discord.git"
+  },
+  "keywords": [
+    "zylos",
+    "discord",
+    "agent"
+  ],
+  "author": "Zylos AI",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.4"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.8"
+  }
+}
