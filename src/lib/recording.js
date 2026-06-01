@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { DATA_DIR, getBotToken } from './config.js';
+import { appendToRing } from './context.js';
 
 const LOG_DIR = path.join(DATA_DIR, 'logs', 'dm');
 const MAX_BODY_BYTES = 64 * 1024;
@@ -44,20 +45,24 @@ export function appendDmLog(channelId, entry) {
 }
 
 export function recordIncoming({ channelId, userId, username, text, messageId }) {
-  appendDmLog(channelId, {
+  const entry = {
     direction: 'in',
     userId: String(userId),
     username,
     text,
     messageId: String(messageId)
-  });
+  };
+  appendDmLog(channelId, entry);
+  appendToRing(channelId, entry);
 }
 
 export function recordOutgoing({ channelId, text }) {
-  appendDmLog(channelId, {
+  const entry = {
     direction: 'out',
     text
-  });
+  };
+  appendDmLog(channelId, entry);
+  appendToRing(channelId, entry);
 }
 
 function readJsonBody(req, res) {

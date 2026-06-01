@@ -25,3 +25,20 @@ export function isDmAuthorized(config, userId) {
       return false;
   }
 }
+
+export function isChannelAllowed(config, policyChannelId) {
+  if (config.groupPolicy === 'disabled') return false;
+  return Object.prototype.hasOwnProperty.call(config.channels || {}, String(policyChannelId));
+}
+
+export function isSmartChannel(config, policyChannelId) {
+  if (config.groupPolicy === 'disabled') return false;
+  const channel = (config.channels || {})[String(policyChannelId)];
+  return channel?.mode === 'smart';
+}
+
+export function isSenderAllowed(config, policyChannelId, userId) {
+  const channel = (config.channels || {})[String(policyChannelId)];
+  const allowFrom = (channel?.allowFrom || []).map(String);
+  return allowFrom.length === 0 || allowFrom.includes(String(userId));
+}

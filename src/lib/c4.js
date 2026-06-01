@@ -39,6 +39,27 @@ export function formatDmMessage({ username, text }) {
   return `[DISCORD DM] ${escapeXml(username)} said: <current-message>\n${escapeXml(text)}\n</current-message>`;
 }
 
+export function formatGroupMessage({ channelName, username, text, history = [], isThread = false, smartHint = false }) {
+  const label = isThread ? 'THREAD' : 'GROUP';
+  const contextTag = isThread ? 'thread-context' : 'group-context';
+  const parts = [`[DISCORD ${label}:${escapeXml(channelName)}] ${escapeXml(username)} said:`];
+
+  if (history.length > 0) {
+    const lines = history.map((entry) => {
+      const name = entry.username || (entry.direction === 'out' ? 'bot' : 'user');
+      return `[${escapeXml(name)}]: ${escapeXml(entry.text)}`;
+    });
+    parts.push(`<${contextTag}>\n${lines.join('\n')}\n</${contextTag}>`);
+  }
+
+  if (smartHint) {
+    parts.push('<smart-mode>\nDecide whether to respond. Reply with exactly [SKIP] to stay silent if this message is not for you or does not need you.\n</smart-mode>');
+  }
+
+  parts.push(`<current-message>\n${escapeXml(text)}\n</current-message>`);
+  return parts.join('\n');
+}
+
 function parseC4Response(stdout) {
   if (!stdout) return null;
   try {

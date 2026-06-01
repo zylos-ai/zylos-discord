@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildEndpoint, escapeXml, formatDmMessage, parseEndpoint } from '../src/lib/c4.js';
+import { buildEndpoint, escapeXml, formatDmMessage, formatGroupMessage, parseEndpoint } from '../src/lib/c4.js';
 
 describe('c4 helpers', () => {
   it('builds and parses DM endpoints', () => {
@@ -34,5 +34,38 @@ describe('c4 helpers', () => {
     expect(result).toContain('&lt;hello&gt;');
     expect(result).toContain('<current-message>');
     expect(result).toContain('</current-message>');
+  });
+
+  it('formats group messages with escaped context', () => {
+    const result = formatGroupMessage({
+      channelName: 'team<&>',
+      username: 'A&B',
+      text: '<hello>',
+      history: [
+        { direction: 'in', username: 'C<D', text: 'prev' },
+        { direction: 'out', text: 'reply & more' }
+      ]
+    });
+
+    expect(result).toContain('[DISCORD GROUP:team&lt;&amp;&gt;] A&amp;B said:');
+    expect(result).toContain('<group-context>');
+    expect(result).toContain('[C&lt;D]: prev');
+    expect(result).toContain('[bot]: reply &amp; more');
+    expect(result).toContain('&lt;hello&gt;');
+  });
+
+  it('formats thread messages with smart-mode hints', () => {
+    const result = formatGroupMessage({
+      channelName: 'parent / thread',
+      username: 'Felix',
+      text: 'needs attention',
+      isThread: true,
+      smartHint: true
+    });
+
+    expect(result).toContain('[DISCORD THREAD:parent / thread] Felix said:');
+    expect(result).toContain('<smart-mode>');
+    expect(result).toContain('[SKIP]');
+    expect(result).not.toContain('<group-context>');
   });
 });
