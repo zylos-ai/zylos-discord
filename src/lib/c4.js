@@ -35,11 +35,19 @@ export function parseEndpoint(endpoint) {
   return result;
 }
 
-export function formatDmMessage({ username, text }) {
-  return `[DISCORD DM] ${escapeXml(username)} said: <current-message>\n${escapeXml(text)}\n</current-message>`;
+function appendFilePath(content, filePath) {
+  if (!filePath) return content;
+  return `${content}\n---- file: ${escapeXml(filePath)}`;
 }
 
-export function formatGroupMessage({ channelName, username, text, history = [], isThread = false, smartHint = false }) {
+export function formatDmMessage({ username, text, filePath = null }) {
+  return appendFilePath(
+    `[DISCORD DM] ${escapeXml(username)} said: <current-message>\n${escapeXml(text)}\n</current-message>`,
+    filePath
+  );
+}
+
+export function formatGroupMessage({ channelName, username, text, history = [], isThread = false, smartHint = false, filePath = null }) {
   const label = isThread ? 'THREAD' : 'GROUP';
   const contextTag = isThread ? 'thread-context' : 'group-context';
   const parts = [`[DISCORD ${label}:${escapeXml(channelName)}] ${escapeXml(username)} said:`];
@@ -57,7 +65,7 @@ export function formatGroupMessage({ channelName, username, text, history = [], 
   }
 
   parts.push(`<current-message>\n${escapeXml(text)}\n</current-message>`);
-  return parts.join('\n');
+  return appendFilePath(parts.join('\n'), filePath);
 }
 
 function parseC4Response(stdout) {
