@@ -6,9 +6,18 @@
  */
 
 import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
-import { bindOwnerIfUnset, hasOwner, isDmAuthorized } from './lib/auth.js';
-import { buildEndpoint, formatDmMessage, sendToC4 } from './lib/c4.js';
+import {
+  bindOwnerIfUnset,
+  hasOwner,
+  isChannelAllowed,
+  isDmAuthorized,
+  isOwner,
+  isSenderAllowed,
+  isSmartChannel
+} from './lib/auth.js';
+import { buildEndpoint, formatDmMessage, formatGroupMessage, sendToC4 } from './lib/c4.js';
 import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig } from './lib/config.js';
+import { channelHistoryLimit, ensureReplay, getHistory } from './lib/context.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
 import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
 import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib/recording.js';
@@ -60,8 +69,13 @@ async function main() {
       handleDirectMessage(message).catch((err) => {
         console.error(`${LOG} DM handler failed: ${err.message}`);
       });
+      return;
     }
-    // Slice 3: route guild messages.
+    if (message.inGuild?.()) {
+      handleGuildMessage(message).catch((err) => {
+        console.error(`${LOG} guild handler failed: ${err.message}`);
+      });
+    }
   });
 
   client.on(Events.Error, (err) => {
@@ -102,6 +116,89 @@ async function main() {
     console.error(`${LOG} gateway login failed: ${normalized.message}`);
     process.exit(1);
   }
+}
+
+function resolvePolicyChannelId(message) {
+  const isThread = message.channel?.isThread?.() || false;
+  return isThread ? (message.channel.parentId || message.channel.id) : message.channel.id;
+}
+
+function resolveChannelName(config, message, policyChannelId, isThread) {
+  const configuredName = config.channels?.[String(policyChannelId)]?.name;
+  const parentName = configuredName || message.channel?.parent?.name || String(policyChannelId);
+  if (!isThread) {
+    return configuredName || message.channel?.name || String(policyChannelId);
+  }
+
+  const threadName = message.channel?.name;
+  return threadName ? `${parentName} / ${threadName}` : parentName;
+}
+
+async function handleGuildMessage(message) {
+  const config = loadConfig();
+  const isThread = message.channel?.isThread?.() || false;
+  const policyChannelId = resolvePolicyChannelId(message);
+  const historyKey = message.channel.id;
+
+  const allowed = isChannelAllowed(config, policyChannelId);
+  const smart = isSmartChannel(config, policyChannelId);
+  if (!allowed && !smart) return;
+
+  const userId = String(message.author.id);
+  if (!isOwner(config, userId) && !isSenderAllowed(config, policyChannelId, userId)) {
+    return;
+  }
+
+  const text = message.cleanContent || message.content || '';
+  if (!text.trim()) return;
+
+  const limit = channelHistoryLimit(config, policyChannelId);
+  if (!ensureReplay(historyKey, limit)) {
+    console.warn(`${LOG} failed to replay history for channel ${historyKey}; will retry next message`);
+  }
+
+  const username = message.author.username || message.author.globalName || userId;
+  try {
+    recordIncoming({
+      channelId: historyKey,
+      userId,
+      username,
+      text,
+      messageId: message.id
+    });
+  } catch (err) {
+    console.warn(`${LOG} failed to record incoming guild message: ${err.message}`);
+  }
+
+  const mentioned = message.mentions?.has?.(client.user) || false;
+  const shouldRespond = smart || mentioned;
+  if (!shouldRespond) return;
+
+  const correlationId = `${historyKey}:${message.id}`;
+  const endpoint = buildEndpoint(historyKey, { messageId: message.id, correlationId });
+  const channelName = resolveChannelName(config, message, policyChannelId, isThread);
+  const smartNoMention = smart && !mentioned;
+  const history = getHistory(historyKey, message.id, limit);
+
+  await setReaction(message);
+  if (!smartNoMention) {
+    startTyping(message.channel, correlationId);
+  }
+
+  const content = formatGroupMessage({
+    channelName,
+    username,
+    text,
+    history,
+    isThread,
+    smartHint: smartNoMention
+  });
+
+  sendToC4('discord', endpoint, content, async (errMsg) => {
+    stopTyping(correlationId);
+    await clearReaction(message);
+    await message.reply(errMsg).catch(() => {});
+  });
 }
 
 async function handleDirectMessage(message) {
