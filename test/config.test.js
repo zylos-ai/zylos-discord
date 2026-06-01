@@ -1,0 +1,147 @@
+import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const originalHome = process.env.HOME;
+const originalToken = process.env.DISCORD_BOT_TOKEN;
+const originalApplicationId = process.env.DISCORD_APPLICATION_ID;
+
+async function importConfig(home) {
+  vi.resetModules();
+  process.env.HOME = home;
+  return import('../src/lib/config.js');
+}
+
+function makeHome() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-discord-test-'));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+afterEach(() => {
+  process.env.HOME = originalHome;
+  if (originalToken === undefined) delete process.env.DISCORD_BOT_TOKEN;
+  else process.env.DISCORD_BOT_TOKEN = originalToken;
+  if (originalApplicationId === undefined) delete process.env.DISCORD_APPLICATION_ID;
+  else process.env.DISCORD_APPLICATION_ID = originalApplicationId;
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
+
+describe('config', () => {
+  it('defines the Slice 1 default schema', async () => {
+    const home = makeHome();
+    const { DEFAULT_CONFIG } = await importConfig(home);
+
+    expect(DEFAULT_CONFIG).toEqual({
+      enabled: true,
+      botToken: null,
+      applicationId: null,
+      owner: null,
+      dmPolicy: 'owner',
+      dmAllowFrom: [],
+      groupPolicy: 'allowlist',
+      channels: {},
+      features: { downloadMedia: true },
+      historyLimit: 5,
+      internalPort: 3475
+    });
+  });
+
+  it('loads config with defaults and normalizes scaffold snake_case keys', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      bot_token: 'from-config',
+      application_id: 'app-123',
+      features: { downloadMedia: false }
+    }));
+
+    expect(mod.loadConfig()).toMatchObject({
+      enabled: true,
+      botToken: 'from-config',
+      applicationId: 'app-123',
+      features: { downloadMedia: false },
+      historyLimit: 5
+    });
+  });
+
+  it('falls back to environment credentials', async () => {
+    const home = makeHome();
+    process.env.DISCORD_BOT_TOKEN = 'from-env';
+    process.env.DISCORD_APPLICATION_ID = 'app-env';
+    const mod = await importConfig(home);
+
+    expect(mod.getBotToken()).toBe('from-env');
+    expect(mod.getApplicationId()).toBe('app-env');
+  });
+
+  it('prefers config credentials over environment credentials', async () => {
+    const home = makeHome();
+    process.env.DISCORD_BOT_TOKEN = 'from-env';
+    process.env.DISCORD_APPLICATION_ID = 'app-env';
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      botToken: 'from-config',
+      applicationId: 'app-config'
+    }));
+
+    expect(mod.getBotToken()).toBe('from-config');
+    expect(mod.getApplicationId()).toBe('app-config');
+  });
+
+  it('saves config atomically and returns success', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+
+    expect(mod.saveConfig({ enabled: false, botToken: 'saved' })).toBe(true);
+    expect(JSON.parse(fs.readFileSync(mod.CONFIG_PATH, 'utf8'))).toEqual({
+      enabled: false,
+      botToken: 'saved'
+    });
+    expect(fs.existsSync(`${mod.CONFIG_PATH}.tmp`)).toBe(false);
+  });
+
+  it('reloads after atomic rename and survives a temporarily missing file', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    mod.saveConfig({ enabled: true });
+
+    const seen = [];
+    const stop = mod.watchConfig((cfg) => {
+      seen.push(cfg.enabled);
+    });
+
+    fs.renameSync(mod.CONFIG_PATH, `${mod.CONFIG_PATH}.bak`);
+    await delay(150);
+    expect(seen).toEqual([]);
+
+    fs.renameSync(`${mod.CONFIG_PATH}.bak`, mod.CONFIG_PATH);
+    mod.saveConfig({ enabled: false });
+
+    await vi.waitFor(() => {
+      expect(seen).toContain(false);
+    }, { timeout: 1000 });
+    stop();
+  });
+
+  it('does not throw when the watcher emits an error', async () => {
+    const home = makeHome();
+    const fakeWatcher = new EventEmitter();
+    fakeWatcher.close = vi.fn();
+    vi.spyOn(fs, 'watch').mockReturnValue(fakeWatcher);
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    mod.saveConfig({ enabled: true });
+
+    mod.watchConfig(() => {});
+    expect(() => fakeWatcher.emit('error', new Error('watch failed'))).not.toThrow();
+    expect(fakeWatcher.close).toHaveBeenCalled();
+  });
+});

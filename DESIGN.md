@@ -1,6 +1,6 @@
 # zylos-discord Design Document
 
-**Version**: v1.0.0
+**Version**: v0.1.0
 **Date**: 2026-06-01
 **Author**: Zylos Team
 **Repository**: https://github.com/zylos-ai/zylos-discord
