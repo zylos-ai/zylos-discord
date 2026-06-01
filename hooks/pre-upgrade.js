@@ -15,8 +15,8 @@
  *   1 - Abort upgrade (with error message)
  */
 
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const HOME = process.env.HOME;
 const DATA_DIR = path.join(HOME, 'zylos/components/discord');
@@ -26,8 +26,10 @@ console.log('[pre-upgrade] Running discord pre-upgrade checks...\n');
 
 // 1. Backup config before upgrade
 if (fs.existsSync(configPath)) {
-  const backupPath = configPath + '.backup';
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = `${configPath}.${timestamp}.backup`;
   fs.copyFileSync(configPath, backupPath);
+  fs.chmodSync(backupPath, 0o600);
   console.log('Config backed up to:', backupPath);
 }
 

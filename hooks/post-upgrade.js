@@ -12,8 +12,8 @@
  * Note: Service restart is handled by Claude after this hook.
  */
 
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const HOME = process.env.HOME;
 const DATA_DIR = path.join(HOME, 'zylos/components/discord');
@@ -45,10 +45,12 @@ if (fs.existsSync(configPath)) {
 
     // Save if migrated
     if (migrated) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+      fs.chmodSync(configPath, 0o600);
       console.log('Config migrations applied:');
       migrations.forEach(m => console.log('  - ' + m));
     } else {
+      fs.chmodSync(configPath, 0o600);
       console.log('No config migrations needed.');
     }
   } catch (err) {
