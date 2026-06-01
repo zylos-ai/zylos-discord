@@ -24,6 +24,7 @@ export const DEFAULT_CONFIG = {
   groupPolicy: 'allowlist',
   channels: {},
   features: { downloadMedia: true },
+  media: { maxBytes: 10 * 1024 * 1024 },
   historyLimit: 5,
   internalPort: 3475
 };

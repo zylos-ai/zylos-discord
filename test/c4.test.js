@@ -27,13 +27,15 @@ describe('c4 helpers', () => {
   it('formats DM messages with escaped username and content', () => {
     const result = formatDmMessage({
       username: 'A&B',
-      text: '<hello>'
+      text: '<hello>',
+      filePath: '/tmp/a&b.png'
     });
 
     expect(result).toContain('[DISCORD DM] A&amp;B said:');
     expect(result).toContain('&lt;hello&gt;');
     expect(result).toContain('<current-message>');
     expect(result).toContain('</current-message>');
+    expect(result).toContain('---- file: /tmp/a&amp;b.png');
   });
 
   it('formats group messages with escaped context', () => {
@@ -44,7 +46,8 @@ describe('c4 helpers', () => {
       history: [
         { direction: 'in', username: 'C<D', text: 'prev' },
         { direction: 'out', text: 'reply & more' }
-      ]
+      ],
+      filePath: '/tmp/group<file>.txt'
     });
 
     expect(result).toContain('[DISCORD GROUP:team&lt;&amp;&gt;] A&amp;B said:');
@@ -52,6 +55,7 @@ describe('c4 helpers', () => {
     expect(result).toContain('[C&lt;D]: prev');
     expect(result).toContain('[bot]: reply &amp; more');
     expect(result).toContain('&lt;hello&gt;');
+    expect(result).toContain('---- file: /tmp/group&lt;file&gt;.txt');
   });
 
   it('formats thread messages with smart-mode hints', () => {

@@ -19,6 +19,7 @@ import { buildEndpoint, formatDmMessage, formatGroupMessage, sendToC4 } from './
 import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig } from './lib/config.js';
 import { channelHistoryLimit, ensureReplay, getHistory } from './lib/context.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
+import { downloadAttachment } from './lib/media.js';
 import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
 import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib/recording.js';
 
@@ -134,11 +135,71 @@ function resolveChannelName(config, message, policyChannelId, isThread) {
   return threadName ? `${parentName} / ${threadName}` : parentName;
 }
 
+function getAttachments(message) {
+  const attachments = message.attachments;
+  if (!attachments) return [];
+  if (typeof attachments.values === 'function') return [...attachments.values()];
+  if (Array.isArray(attachments)) return attachments;
+  return [];
+}
+
+function mediaMaxBytes(config) {
+  const value = Number(config.media?.maxBytes);
+  return Number.isFinite(value) && value > 0 ? value : 10 * 1024 * 1024;
+}
+
+function attachmentName(attachment) {
+  return attachment?.name || 'file';
+}
+
+function moreAttachmentsNote(count) {
+  return count > 1 ? ` [+${count - 1} more attachments]` : '';
+}
+
+function skippedAttachmentNote(result, name = 'file') {
+  const reason = result?.reason === 'too_large'
+    ? 'too large'
+    : (result?.reason ? result.reason.replace(/_/g, ' ') : 'download failed');
+  return `[attachment skipped: ${reason}: ${name}]`;
+}
+
+function sentFileNote(name = 'file') {
+  return `[sent a file: ${name}]`;
+}
+
+function appendNote(text, note) {
+  const cleanText = String(text || '').trim();
+  return cleanText ? `${cleanText} ${note}` : note;
+}
+
+async function resolveInboundMedia(config, attachment, { download }) {
+  if (!attachment) return { filePath: null, note: null };
+
+  const name = attachmentName(attachment);
+  if (!download) {
+    return { filePath: null, note: `[attachment: ${name}]` };
+  }
+
+  try {
+    const result = await downloadAttachment(attachment, { maxBytes: mediaMaxBytes(config) });
+    if (result?.filePath) {
+      return { filePath: result.filePath, note: sentFileNote(result.name || name) };
+    }
+    return { filePath: null, note: skippedAttachmentNote(result, name) };
+  } catch (err) {
+    console.warn(`${LOG} failed to download attachment: ${err.message}`);
+    return { filePath: null, note: `[attachment skipped: download failed: ${name}]` };
+  }
+}
+
 async function handleGuildMessage(message) {
   const config = loadConfig();
   const isThread = message.channel?.isThread?.() || false;
   const policyChannelId = resolvePolicyChannelId(message);
   const historyKey = message.channel.id;
+  const attachments = getAttachments(message);
+  const firstAttachment = attachments[0];
+  const hasAttachment = attachments.length > 0;
 
   const allowed = isChannelAllowed(config, policyChannelId);
   const smart = isSmartChannel(config, policyChannelId);
@@ -150,7 +211,23 @@ async function handleGuildMessage(message) {
   }
 
   const text = message.cleanContent || message.content || '';
-  if (!text.trim()) return;
+  if (!text.trim() && !hasAttachment) return;
+
+  const mentioned = message.mentions?.has?.(client.user) || false;
+  const shouldRespond = smart || mentioned;
+  if (!text.trim() && hasAttachment && !shouldRespond) return;
+
+  const smartNoMention = smart && !mentioned;
+  const shouldDownloadMedia = shouldRespond && hasAttachment && config.features?.downloadMedia !== false && !smartNoMention;
+  const media = hasAttachment && config.features?.downloadMedia === false && shouldRespond
+    ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` }
+    : (hasAttachment
+        ? await resolveInboundMedia(config, firstAttachment, { download: shouldDownloadMedia })
+        : { filePath: null, note: null });
+  const countNote = moreAttachmentsNote(attachments.length);
+  const mediaNote = media.note ? `${media.note}${countNote}` : (countNote.trim() || null);
+  const historyText = mediaNote ? appendNote(text, mediaNote) : text;
+  if (!historyText.trim()) return;
 
   const limit = channelHistoryLimit(config, policyChannelId);
   if (!ensureReplay(historyKey, limit)) {
@@ -163,21 +240,18 @@ async function handleGuildMessage(message) {
       channelId: historyKey,
       userId,
       username,
-      text,
+      text: historyText,
       messageId: message.id
     });
   } catch (err) {
     console.warn(`${LOG} failed to record incoming guild message: ${err.message}`);
   }
 
-  const mentioned = message.mentions?.has?.(client.user) || false;
-  const shouldRespond = smart || mentioned;
   if (!shouldRespond) return;
 
   const correlationId = `${historyKey}:${message.id}`;
   const endpoint = buildEndpoint(historyKey, { messageId: message.id, correlationId });
   const channelName = resolveChannelName(config, message, policyChannelId, isThread);
-  const smartNoMention = smart && !mentioned;
   const history = getHistory(historyKey, message.id, limit);
 
   await setReaction(message);
@@ -188,10 +262,11 @@ async function handleGuildMessage(message) {
   const content = formatGroupMessage({
     channelName,
     username,
-    text,
+    text: historyText,
     history,
     isThread,
-    smartHint: smartNoMention
+    smartHint: smartNoMention,
+    filePath: media.filePath
   });
 
   sendToC4('discord', endpoint, content, async (errMsg) => {
@@ -205,7 +280,10 @@ async function handleDirectMessage(message) {
   let config = loadConfig();
   const userId = String(message.author.id);
   const username = message.author.username || message.author.globalName || userId;
-  const text = message.content || '';
+  const text = message.cleanContent || message.content || '';
+  const attachments = getAttachments(message);
+  const firstAttachment = attachments[0];
+  const hasAttachment = attachments.length > 0;
 
   if (!hasOwner(config)) {
     bindOwnerIfUnset(config, userId);
@@ -216,16 +294,27 @@ async function handleDirectMessage(message) {
     await message.reply('You are now the owner (admin) of this bot.').catch(() => {});
   }
 
-  if (!text.trim()) {
-    await message.reply('Attachments are not supported yet. Please send text.').catch(() => {});
-    return;
-  }
-
   config = loadConfig();
   if (!isDmAuthorized(config, userId)) {
     await message.reply('Sorry, this bot is private.').catch(() => {});
     return;
   }
+
+  if (!text.trim() && !hasAttachment) {
+    await message.reply('Please send text or a file.').catch(() => {});
+    return;
+  }
+
+  if (hasAttachment && config.features?.downloadMedia === false && !text.trim()) {
+    await message.reply('Media downloads are disabled. Please send text.').catch(() => {});
+    return;
+  }
+
+  const media = hasAttachment && config.features?.downloadMedia !== false
+    ? await resolveInboundMedia(config, firstAttachment, { download: true })
+    : (hasAttachment ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` } : { filePath: null, note: null });
+  const mediaNote = media.note ? `${media.note}${moreAttachmentsNote(attachments.length)}` : null;
+  const historyText = mediaNote ? appendNote(text, mediaNote) : text;
 
   const correlationId = `${message.channel.id}:${message.id}`;
   const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId });
@@ -235,7 +324,7 @@ async function handleDirectMessage(message) {
       channelId: message.channel.id,
       userId,
       username,
-      text,
+      text: historyText,
       messageId: message.id
     });
   } catch (err) {
@@ -245,7 +334,7 @@ async function handleDirectMessage(message) {
   await setReaction(message);
   startTyping(message.channel, correlationId);
 
-  const content = formatDmMessage({ username, text });
+  const content = formatDmMessage({ username, text: historyText, filePath: media.filePath });
   sendToC4('discord', endpoint, content, async (errMsg) => {
     stopTyping(correlationId);
     await clearReaction(message);

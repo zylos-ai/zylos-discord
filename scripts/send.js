@@ -7,6 +7,8 @@
  */
 
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
 import { getBotToken, getConfig } from '../src/lib/config.js';
 import { parseEndpoint } from '../src/lib/c4.js';
 import { markTypingDone, safeCorrelationId, THINKING_REACTION } from '../src/lib/reactions.js';
@@ -14,6 +16,7 @@ import { getInternalToken } from '../src/lib/recording.js';
 
 const API = 'https://discord.com/api/v10';
 const MAX_LENGTH = 2000;
+const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 const CHUNK_DELAY_MS = 400;
 const IS_DIRECT = process.argv[1] === fileURLToPath(import.meta.url);
 
@@ -85,6 +88,28 @@ export function splitMessage(text, maxLen = MAX_LENGTH) {
   return chunks;
 }
 
+export function parseMediaMessage(text) {
+  const match = String(text || '').match(/^\[MEDIA:(image|file)](.+)$/);
+  if (!match) return null;
+  const filePath = match[2].trim();
+  if (!filePath) return null;
+  return { kind: match[1], filePath };
+}
+
+export function validateMediaFile(filePath, maxBytes = MAX_MEDIA_BYTES) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`file not found: ${filePath}`);
+  }
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error('media path is not a file');
+  }
+  if (stat.size > maxBytes) {
+    throw new Error('file exceeds 10MB');
+  }
+  return stat;
+}
+
 async function discordRequest(url, options, { maxRetries = 2 } = {}) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const res = await fetch(url, options);
@@ -127,6 +152,33 @@ async function sendDiscordMessage(content, { replyToId } = {}) {
   }
 }
 
+async function uploadDiscordMedia(filePath, { replyToId } = {}) {
+  validateMediaFile(filePath);
+
+  const payload = {
+    allowed_mentions: { parse: [] }
+  };
+  if (replyToId) {
+    payload.message_reference = { message_id: replyToId };
+  }
+
+  const form = new FormData();
+  form.append('payload_json', JSON.stringify(payload));
+  form.append('files[0]', new Blob([fs.readFileSync(filePath)]), path.basename(filePath));
+
+  const res = await discordRequest(`${API}/channels/${endpoint.channelId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bot ${getResolvedBotToken()}` },
+    body: form
+  });
+
+  if (!res.ok) {
+    const err = new Error(`Discord API ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+}
+
 async function sendText(text) {
   const chunks = splitMessage(text);
   if (chunks.length === 0) return;
@@ -147,6 +199,21 @@ async function sendText(text) {
       await sleep(CHUNK_DELAY_MS);
     }
   }
+}
+
+async function sendMedia(filePath) {
+  if (endpoint.msg) {
+    try {
+      await uploadDiscordMedia(filePath, { replyToId: endpoint.msg });
+      return;
+    } catch (err) {
+      if (!err.status) throw err;
+      await uploadDiscordMedia(filePath);
+      return;
+    }
+  }
+
+  await uploadDiscordMedia(filePath);
 }
 
 async function clearReaction() {
@@ -207,8 +274,17 @@ async function main() {
       return;
     }
 
-    if (message.startsWith('[MEDIA:')) {
-      throw new Error('Discord media outbound is not implemented yet');
+    const media = parseMediaMessage(message);
+    if (message.startsWith('[MEDIA:') && !media) {
+      throw new Error('invalid media message');
+    }
+
+    if (media) {
+      await sendMedia(media.filePath);
+      await recordOutgoing(`[sent a file: ${path.basename(media.filePath)}]`);
+      await cleanup();
+      console.log('Media sent successfully');
+      return;
     }
 
     await sendText(message);

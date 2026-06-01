@@ -45,19 +45,24 @@ describe('context history', () => {
     ]);
   });
 
-  it('leaves failed replay retryable', async () => {
+  it('skips malformed JSONL lines and keeps replay successful', async () => {
     const home = makeHome();
     const logDir = path.join(home, 'zylos/components/discord/logs/dm');
     fs.mkdirSync(logDir, { recursive: true });
     const filePath = path.join(logDir, 'chan1.jsonl');
-    fs.writeFileSync(filePath, '{bad json}\n');
+    fs.writeFileSync(filePath, [
+      JSON.stringify({ direction: 'in', username: 'A', text: 'ok', messageId: 'm1' }),
+      '{bad json}',
+      JSON.stringify({ direction: 'out', text: 'reply' })
+    ].join('\n') + '\n');
     const context = await importContext(home);
 
-    expect(context.ensureReplay('chan1', 5)).toBe(false);
-    fs.writeFileSync(filePath, `${JSON.stringify({ direction: 'in', username: 'A', text: 'ok', messageId: 'm1' })}\n`);
+    expect(context.ensureReplay('chan1', 5)).toBe(true);
+    fs.writeFileSync(filePath, `${JSON.stringify({ direction: 'in', username: 'B', text: 'new', messageId: 'm2' })}\n`);
     expect(context.ensureReplay('chan1', 5)).toBe(true);
     expect(context.getHistory('chan1', null, 5)).toEqual([
-      { direction: 'in', username: 'A', text: 'ok', messageId: 'm1' }
+      { direction: 'in', username: 'A', text: 'ok', messageId: 'm1' },
+      { direction: 'out', username: 'bot', text: 'reply', messageId: null }
     ]);
   });
 

@@ -69,7 +69,14 @@ export function ensureReplay(historyKey, limit = DEFAULT_HISTORY_LIMIT) {
     const entries = [];
     for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
-      const normalized = normalizeEntry(JSON.parse(line));
+      let parsed;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        console.warn(`[discord] skipping malformed log line in ${key}`);
+        continue;
+      }
+      const normalized = normalizeEntry(parsed);
       if (normalized) entries.push(normalized);
     }
 
