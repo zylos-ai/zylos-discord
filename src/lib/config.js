@@ -5,8 +5,8 @@
  * with hot-reload support via file watcher.
  */
 
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const HOME = process.env.HOME;
 export const DATA_DIR = path.join(HOME, 'zylos/components/discord');
@@ -15,11 +15,52 @@ export const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 // Default configuration
 export const DEFAULT_CONFIG = {
   enabled: true,
-  settings: {}
+  botToken: null,
+  applicationId: null,
+  owner: null,
+  dmPolicy: 'owner',
+  dmAllowFrom: [],
+  groupPolicy: 'allowlist',
+  channels: {},
+  features: { downloadMedia: true },
+  historyLimit: 5,
+  internalPort: 3475
 };
 
 let config = null;
 let configWatcher = null;
+let configReloadTimer = null;
+
+function deepMerge(defaults, overrides = {}) {
+  const result = { ...defaults };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      defaults[key] &&
+      typeof defaults[key] === 'object' &&
+      !Array.isArray(defaults[key])
+    ) {
+      result[key] = deepMerge(defaults[key], value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+export function mergeConfigWithDefaults(parsed = {}) {
+  const normalized = { ...parsed };
+  if (!normalized.botToken && parsed.bot_token) {
+    normalized.botToken = parsed.bot_token;
+  }
+  if (!normalized.applicationId && parsed.application_id) {
+    normalized.applicationId = parsed.application_id;
+  }
+
+  return deepMerge(DEFAULT_CONFIG, normalized);
+}
 
 /**
  * Load configuration from file
@@ -29,14 +70,14 @@ export function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const content = fs.readFileSync(CONFIG_PATH, 'utf8');
-      config = { ...DEFAULT_CONFIG, ...JSON.parse(content) };
+      config = mergeConfigWithDefaults(JSON.parse(content));
     } else {
       console.warn(`[discord] Config file not found: ${CONFIG_PATH}`);
-      config = { ...DEFAULT_CONFIG };
+      config = mergeConfigWithDefaults();
     }
   } catch (err) {
     console.error(`[discord] Failed to load config: ${err.message}`);
-    config = { ...DEFAULT_CONFIG };
+    config = mergeConfigWithDefaults();
   }
   return config;
 }
@@ -57,12 +98,19 @@ export function getConfig() {
  * @param {Object} newConfig - Configuration to save
  */
 export function saveConfig(newConfig) {
+  const tmpPath = CONFIG_PATH + '.tmp';
   try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2));
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(tmpPath, JSON.stringify(newConfig, null, 2) + '\n', { mode: 0o600 });
+    fs.renameSync(tmpPath, CONFIG_PATH);
     config = newConfig;
+    return true;
   } catch (err) {
     console.error(`[discord] Failed to save config: ${err.message}`);
-    throw err;
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+    return false;
   }
 }
 
@@ -74,26 +122,71 @@ export function watchConfig(onChange) {
   if (configWatcher) {
     configWatcher.close();
   }
+  if (configReloadTimer) {
+    clearTimeout(configReloadTimer);
+    configReloadTimer = null;
+  }
 
-  if (fs.existsSync(CONFIG_PATH)) {
-    configWatcher = fs.watch(CONFIG_PATH, (eventType) => {
-      if (eventType === 'change') {
-        console.log('[discord] Config file changed, reloading...');
-        loadConfig();
-        if (onChange) {
-          onChange(config);
-        }
+  const configDir = path.dirname(CONFIG_PATH);
+  const configBase = path.basename(CONFIG_PATH);
+
+  const scheduleReload = () => {
+    if (configReloadTimer) clearTimeout(configReloadTimer);
+    configReloadTimer = setTimeout(() => {
+      configReloadTimer = null;
+      if (!fs.existsSync(CONFIG_PATH)) {
+        return;
+      }
+      console.log('[discord] Config file changed, reloading...');
+      loadConfig();
+      if (onChange) {
+        onChange(config);
+      }
+    }, 100);
+  };
+
+  if (fs.existsSync(configDir)) {
+    configWatcher = fs.watch(configDir, (eventType, filename) => {
+      if ((eventType === 'change' || eventType === 'rename') && filename && String(filename) === configBase) {
+        scheduleReload();
       }
     });
+    configWatcher.on('error', (err) => {
+      console.warn(`[discord] Config watcher error: ${err.message}`);
+      if (configReloadTimer) {
+        clearTimeout(configReloadTimer);
+        configReloadTimer = null;
+      }
+      try {
+        configWatcher.close();
+      } catch {}
+      configWatcher = null;
+    });
   }
+
+  return stopWatching;
 }
 
 /**
  * Stop watching config file
  */
 export function stopWatching() {
+  if (configReloadTimer) {
+    clearTimeout(configReloadTimer);
+    configReloadTimer = null;
+  }
   if (configWatcher) {
     configWatcher.close();
     configWatcher = null;
   }
+}
+
+export function getBotToken() {
+  const cfg = getConfig();
+  return cfg.botToken || process.env.DISCORD_BOT_TOKEN || '';
+}
+
+export function getApplicationId() {
+  const cfg = getConfig();
+  return cfg.applicationId || process.env.DISCORD_APPLICATION_ID || '';
 }
