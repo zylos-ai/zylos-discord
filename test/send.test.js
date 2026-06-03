@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   applyTextMode,
   clearThinkingReactions,
+  deriveThreadTitle,
   formatReceipt,
   parseLinkMessage,
   parseMediaMessage,
@@ -51,21 +52,55 @@ function makeHome({ port, textMode = 'markdown' }) {
   return home;
 }
 
-async function withFakeServers(fn) {
+function parseRequestBody(req, bodyText) {
+  const contentType = req.headers['content-type'] || '';
+  if (!bodyText) return null;
+  if (contentType.includes('multipart/form-data')) {
+    const payloadMatch = bodyText.match(/name="payload_json"\r\n\r\n([\s\S]*?)\r\n--/);
+    return {
+      payload_json: payloadMatch ? JSON.parse(payloadMatch[1]) : null,
+      multipart: true
+    };
+  }
+  return JSON.parse(bodyText);
+}
+
+async function withFakeServers(fn, { channelTypes = {} } = {}) {
   const requests = [];
   let messageSeq = 0;
+  let threadSeq = 0;
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
       const bodyText = Buffer.concat(chunks).toString('utf8');
-      const body = bodyText ? JSON.parse(bodyText) : null;
+      const body = parseRequestBody(req, bodyText);
       requests.push({
         method: req.method,
         url: req.url,
         token: req.headers['x-internal-token'],
         body
       });
+
+      if (req.method === 'GET' && req.url?.startsWith('/channels/')) {
+        const channelId = req.url.split('/')[2];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: channelId, type: channelTypes[channelId] ?? 0 }));
+        return;
+      }
+
+      if (req.method === 'POST' && req.url?.endsWith('/threads')) {
+        threadSeq += 1;
+        const channelId = req.url.split('/')[2];
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          id: `thread-${threadSeq}`,
+          parent_id: channelId,
+          type: 11,
+          message: { id: `thread-msg-${threadSeq}` }
+        }));
+        return;
+      }
 
       if (req.method === 'POST' && req.url?.startsWith('/channels/')) {
         messageSeq += 1;
@@ -126,6 +161,12 @@ describe('send helpers', () => {
     expect(applyTextMode('**bold** _x_', {})).toBe('**bold** _x_');
     expect(applyTextMode('**bold** _x_', { textMode: 'markdown' })).toBe('**bold** _x_');
     expect(applyTextMode('**bold** _x_', { textMode: 'plain' })).toBe('\\*\\*bold\\*\\* \\_x\\_');
+  });
+
+  it('derives forum thread titles from the first line with fallback and capping', () => {
+    expect(deriveThreadTitle('  Title line  \nbody')).toBe('Title line');
+    expect(deriveThreadTitle('', 'Shared file')).toBe('Shared file');
+    expect(deriveThreadTitle('a'.repeat(150))).toHaveLength(100);
   });
 
   it('validates outbound media paths', () => {
@@ -212,7 +253,127 @@ describe('send helpers', () => {
       expect(result.code).toBe(0);
       expect(result.stdout).toContain('RECEIPT {"messageId":"sent-1","channelId":"chan1"}');
       expect(requests.find((req) => req.url === '/channels/chan1/messages')?.body.content).toBe('hello from argv');
+      expect(requests.some((req) => req.url === '/channels/chan1/threads')).toBe(false);
     });
+  });
+
+  it('creates a forum thread for fresh forum channel sends', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['forum1', 'Thread title\nbody text'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('RECEIPT {"messageId":"thread-msg-1","channelId":"thread-1"}');
+      expect(requests.find((req) => req.method === 'GET' && req.url === '/channels/forum1')).toBeTruthy();
+      expect(requests.find((req) => req.url === '/channels/forum1/threads')?.body).toEqual({
+        name: 'Thread title',
+        message: {
+          content: 'Thread title\nbody text',
+          allowed_mentions: { parse: [] }
+        }
+      });
+      expect(requests.some((req) => req.url === '/channels/forum1/messages')).toBe(false);
+    }, { channelTypes: { forum1: 15 } });
+  });
+
+  it('caps forum thread titles at the Discord limit', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const title = 'a'.repeat(150);
+      const result = await runSend(['forum1', `${title}\nbody`], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(requests.find((req) => req.url === '/channels/forum1/threads')?.body.name).toBe('a'.repeat(100));
+    }, { channelTypes: { forum1: 15 } });
+  });
+
+  it('creates a media-channel thread with a fallback title for media-only sends', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-send-upload-'));
+      const filePath = path.join(dir, 'report.txt');
+      fs.writeFileSync(filePath, 'report');
+      const result = await runSend(['media1', `[MEDIA:file]${filePath}`], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      const threadReq = requests.find((req) => req.url === '/channels/media1/threads');
+      expect(threadReq?.body.payload_json).toEqual({
+        name: 'Shared file',
+        message: {
+          allowed_mentions: { parse: [] }
+        }
+      });
+      expect(threadReq?.body.multipart).toBe(true);
+      expect(requests.some((req) => req.url === '/channels/media1/messages')).toBe(false);
+    }, { channelTypes: { media1: 16 } });
+  });
+
+  it('posts replies into existing thread channels without creating a forum thread', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['thread1|msg:parent-msg|req:thread1:parent-msg', 'reply body'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(requests.some((req) => req.method === 'GET' && req.url === '/channels/thread1')).toBe(false);
+      expect(requests.some((req) => req.url === '/channels/thread1/threads')).toBe(false);
+      expect(requests.find((req) => req.url === '/channels/thread1/messages')?.body).toEqual({
+        content: 'reply body',
+        allowed_mentions: { parse: [] },
+        message_reference: { message_id: 'parent-msg' }
+      });
+    });
+  });
+
+  it('preserves link handling and plain text mode on forum thread sends', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, textMode: 'plain' });
+      const result = await runSend(['forum1', '[LINK]https://example.com/a_b#frag'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      const body = requests.find((req) => req.url === '/channels/forum1/threads')?.body;
+      expect(body.name).toBe('https://example.com/a_b#frag');
+      expect(body.message.content).toBe('https://example.com/a_b#frag');
+    }, { channelTypes: { forum1: 15 } });
+
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, textMode: 'plain' });
+      const result = await runSend(['forum1', '**bold** _x_'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      const body = requests.find((req) => req.url === '/channels/forum1/threads')?.body;
+      expect(body.name).toBe('**bold** _x_');
+      expect(body.message.content).toBe('\\*\\*bold\\*\\* \\_x\\_');
+    }, { channelTypes: { forum1: 15 } });
   });
 
   it('sends endpoint-only piped stdin messages', async () => {
