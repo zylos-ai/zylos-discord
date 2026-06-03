@@ -8,6 +8,7 @@ const TYPING_DIR = path.join(DATA_DIR, 'typing');
 const TYPING_TIMEOUT_MS = 120 * 1000;
 const TYPING_INTERVAL_MS = 8000;
 const activeTyping = new Map();
+const pendingThinking = new Map();
 
 export function safeCorrelationId(raw) {
   if (!raw) return null;
@@ -31,6 +32,65 @@ export function markTypingDone(correlationId) {
   }
 }
 
+function pendingChannelId(message) {
+  return String(message?.channel?.id || message?.channelId || '');
+}
+
+function pendingMessageId(message) {
+  return String(message?.id || '');
+}
+
+export function trackThinkingReaction(message) {
+  const channelId = pendingChannelId(message);
+  const messageId = pendingMessageId(message);
+  if (!channelId || !messageId) return false;
+
+  let channelPending = pendingThinking.get(channelId);
+  if (!channelPending) {
+    channelPending = new Map();
+    pendingThinking.set(channelId, channelPending);
+  }
+  channelPending.set(messageId, message);
+  return true;
+}
+
+export function untrackThinkingReaction(message) {
+  const channelId = pendingChannelId(message);
+  const messageId = pendingMessageId(message);
+  const channelPending = channelId ? pendingThinking.get(channelId) : null;
+  if (!channelPending || !messageId) return false;
+
+  const deleted = channelPending.delete(messageId);
+  if (channelPending.size === 0) {
+    pendingThinking.delete(channelId);
+  }
+  return deleted;
+}
+
+export function pendingThinkingCount(channelId) {
+  return pendingThinking.get(String(channelId))?.size || 0;
+}
+
+export async function clearThinkingReactionsForChannel(channelId, emoji = THINKING_REACTION) {
+  const safeChannelId = String(channelId || '');
+  const channelPending = pendingThinking.get(safeChannelId);
+  if (!channelPending) {
+    return { attempted: 0, cleared: 0 };
+  }
+
+  const messages = [...channelPending.values()];
+  pendingThinking.delete(safeChannelId);
+
+  let cleared = 0;
+  for (const message of messages) {
+    if (await clearReaction(message, emoji)) {
+      cleared += 1;
+    }
+  }
+
+  return { attempted: messages.length, cleared };
+}
+
 function doneFileExists(correlationId) {
   const safe = safeCorrelationId(correlationId);
   return !!safe && fs.existsSync(path.join(TYPING_DIR, `${safe}.done`));
@@ -39,6 +99,9 @@ function doneFileExists(correlationId) {
 export async function setReaction(message, emoji = THINKING_REACTION) {
   try {
     await message.react(emoji);
+    if (emoji === THINKING_REACTION) {
+      trackThinkingReaction(message);
+    }
     return true;
   } catch {
     return false;
@@ -49,6 +112,9 @@ export async function clearReaction(message, emoji = THINKING_REACTION) {
   try {
     const reaction = message.reactions?.cache?.get(emoji);
     await reaction?.users?.remove(message.client?.user?.id);
+    if (emoji === THINKING_REACTION) {
+      untrackThinkingReaction(message);
+    }
     return true;
   } catch {
     return false;

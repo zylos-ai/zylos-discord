@@ -72,5 +72,8 @@ node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint>" < message.txt
 - **Connection:** Gateway WebSocket (discord.js v14). No webhook / Caddy route.
 - **Setup:** bot token + enable Message Content Intent + invite the bot to a server.
 - **Owner:** the first user to DM the bot becomes the owner (admin).
+- **Guild access:** the owner may use server channels even when `groupPolicy`
+  is `disabled`; non-owner server access still follows configured channel and
+  sender policy.
 
 Run any script with `--help` for full options.

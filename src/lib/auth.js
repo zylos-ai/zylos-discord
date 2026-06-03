@@ -42,3 +42,19 @@ export function isSenderAllowed(config, policyChannelId, userId) {
   const allowFrom = (channel?.allowFrom || []).map(String);
   return allowFrom.length === 0 || allowFrom.includes(String(userId));
 }
+
+export function resolveGuildAccess(config, policyChannelId, userId) {
+  const owner = isOwner(config, userId);
+  const allowed = isChannelAllowed(config, policyChannelId);
+  const smart = isSmartChannel(config, policyChannelId);
+
+  if (!owner && !allowed && !smart) {
+    return { ok: false, owner, allowed, smart };
+  }
+
+  if (!owner && !isSenderAllowed(config, policyChannelId, userId)) {
+    return { ok: false, owner, allowed, smart };
+  }
+
+  return { ok: true, owner, allowed, smart };
+}

@@ -5,6 +5,7 @@ import {
   isChannelAllowed,
   isDmAuthorized,
   isOwner,
+  resolveGuildAccess,
   isSenderAllowed,
   isSmartChannel
 } from '../src/lib/auth.js';
@@ -54,5 +55,59 @@ describe('auth', () => {
     expect(isSenderAllowed({ channels: { c1: {} } }, 'c1', 'user1')).toBe(true);
     expect(isSenderAllowed({ channels: { c1: { allowFrom: [123] } } }, 'c1', '123')).toBe(true);
     expect(isSenderAllowed({ channels: { c1: { allowFrom: ['abc'] } } }, 'c1', '123')).toBe(false);
+  });
+
+  it('lets the owner bypass disabled guild policy without opening it to non-owners', () => {
+    const config = {
+      owner: 'owner1',
+      groupPolicy: 'disabled',
+      channels: {
+        guild1: { mode: 'mention' }
+      }
+    };
+
+    expect(resolveGuildAccess(config, 'guild1', 'owner1')).toMatchObject({
+      ok: true,
+      owner: true,
+      allowed: false,
+      smart: false
+    });
+    expect(resolveGuildAccess(config, 'guild1', 'user1')).toMatchObject({
+      ok: false,
+      owner: false,
+      allowed: false,
+      smart: false
+    });
+  });
+
+  it('preserves allowlist, smart, and sender gates for non-owners', () => {
+    const config = {
+      owner: 'owner1',
+      groupPolicy: 'allowlist',
+      channels: {
+        mention: { mode: 'mention', allowFrom: ['user1'] },
+        smart: { mode: 'smart' },
+        blocked: { mode: 'mention', allowFrom: ['other'] }
+      }
+    };
+
+    expect(resolveGuildAccess(config, 'mention', 'user1')).toMatchObject({
+      ok: true,
+      owner: false,
+      allowed: true,
+      smart: false
+    });
+    expect(resolveGuildAccess(config, 'smart', 'user2')).toMatchObject({
+      ok: true,
+      owner: false,
+      allowed: true,
+      smart: true
+    });
+    expect(resolveGuildAccess(config, 'blocked', 'user1')).toMatchObject({
+      ok: false,
+      owner: false,
+      allowed: true,
+      smart: false
+    });
   });
 });

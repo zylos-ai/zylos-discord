@@ -54,4 +54,91 @@ describe('recording helpers', () => {
     expect(lines[0]).toMatchObject({ direction: 'in', text: 'hello' });
     expect(lines[1]).toMatchObject({ direction: 'out', text: 'hi' });
   });
+
+  it('routes record-outgoing by pathname and keeps token gate enforced', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-record-'));
+    const mod = await importRecording(home);
+    const token = 'internal-token';
+    const server = mod.startRecordingServer({ port: 0, internalToken: token });
+    await new Promise((resolve) => server.once('listening', resolve));
+    const port = server.address().port;
+
+    try {
+      const unauthorized = await fetch(`http://127.0.0.1:${port}/internal/record-outgoing?x=1`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Token': 'wrong'
+        },
+        body: JSON.stringify({ channelId: 'chan1', text: 'blocked' })
+      });
+      expect(unauthorized.status).toBe(401);
+
+      const authorized = await fetch(`http://127.0.0.1:${port}/internal/record-outgoing?x=1`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Token': token
+        },
+        body: JSON.stringify({ channelId: 'chan1', text: 'hello' })
+      });
+      expect(authorized.status).toBe(200);
+
+      const logFile = path.join(home, 'zylos/components/discord/logs/dm/chan1.jsonl');
+      const lines = fs.readFileSync(logFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ direction: 'out', text: 'hello' });
+    } finally {
+      mod.stopRecordingServer();
+    }
+  });
+
+  it('clears all pending thinking reactions for a channel through the internal endpoint', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-record-'));
+    const mod = await importRecording(home);
+    const reactions = await import('../src/lib/reactions.js');
+    const token = 'internal-token';
+    const removed = [];
+    const makeMessage = (id) => ({
+      id,
+      channel: { id: 'chan1' },
+      client: { user: { id: 'bot1' } },
+      react: vi.fn(async () => {}),
+      reactions: {
+        cache: new Map([
+          [reactions.THINKING_REACTION, { users: { remove: vi.fn(async (userId) => removed.push({ id, userId })) } }]
+        ])
+      }
+    });
+
+    await reactions.setReaction(makeMessage('msg1'));
+    await reactions.setReaction(makeMessage('msg2'));
+    expect(reactions.pendingThinkingCount('chan1')).toBe(2);
+
+    const server = mod.startRecordingServer({ port: 0, internalToken: token });
+    await new Promise((resolve) => server.once('listening', resolve));
+    const port = server.address().port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/internal/clear-thinking?x=1`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Token': token
+        },
+        body: JSON.stringify({ channelId: 'chan1' })
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({ ok: true, attempted: 2, cleared: 2 });
+      expect(reactions.pendingThinkingCount('chan1')).toBe(0);
+      expect(removed).toEqual([
+        { id: 'msg1', userId: 'bot1' },
+        { id: 'msg2', userId: 'bot1' }
+      ]);
+    } finally {
+      mod.stopRecordingServer();
+    }
+  });
 });
