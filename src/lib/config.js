@@ -26,6 +26,7 @@ export const DEFAULT_CONFIG = {
   features: { downloadMedia: true },
   media: { maxBytes: 10 * 1024 * 1024 },
   historyLimit: 5,
+  textMode: 'markdown',
   internalPort: 3475
 };
 
@@ -84,6 +85,9 @@ export function mergeConfigWithDefaults(parsed = {}) {
   }
   if (!normalized.applicationId && parsed.application_id) {
     normalized.applicationId = parsed.application_id;
+  }
+  if (normalized.textMode && !['plain', 'markdown'].includes(normalized.textMode)) {
+    normalized.textMode = DEFAULT_CONFIG.textMode;
   }
 
   return deepMerge(DEFAULT_CONFIG, normalized);
