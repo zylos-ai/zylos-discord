@@ -30,6 +30,7 @@ import {
   messageText,
   reactionEmoji,
   resolveReplyContext,
+  shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
   shouldForwardReaction
@@ -37,6 +38,7 @@ import {
 import { downloadAttachment } from './lib/media.js';
 import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
 import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib/recording.js';
+import { isVoiceMessageAttachment, resolveVoiceNote } from './lib/voice.js';
 
 const LOG = '[discord]';
 
@@ -231,7 +233,7 @@ function sendDiscordEvent(message, kind, content) {
   return true;
 }
 
-async function resolveInboundMedia(config, attachment, { download }) {
+async function resolveInboundMedia(config, attachment, { download, message = null } = {}) {
   if (!attachment) return { filePath: null, note: null };
 
   const name = attachmentName(attachment);
@@ -242,6 +244,11 @@ async function resolveInboundMedia(config, attachment, { download }) {
   try {
     const result = await downloadAttachment(attachment, { maxBytes: mediaMaxBytes(config) });
     if (result?.filePath) {
+      const resolvedAttachment = { ...attachment, contentType: attachment.contentType || result.contentType };
+      if (isVoiceMessageAttachment(resolvedAttachment, message)) {
+        const voice = await resolveVoiceNote(resolvedAttachment, result.filePath, config);
+        return { filePath: result.filePath, note: voice.note };
+      }
       return { filePath: result.filePath, note: sentFileNote(result.name || name) };
     }
     return { filePath: null, note: skippedAttachmentNote(result, name) };
@@ -340,11 +347,16 @@ async function handleGuildMessage(message) {
   if (!text.trim() && hasAttachment && !shouldRespond) return;
 
   const smartNoMention = access.smart && !mentioned;
-  const shouldDownloadMedia = shouldRespond && hasAttachment && config.features?.downloadMedia !== false && !smartNoMention;
+  const shouldDownloadMedia = shouldDownloadInboundMedia({
+    shouldRespond,
+    hasAttachment,
+    downloadMediaEnabled: config.features?.downloadMedia !== false,
+    smartNoMention
+  });
   const media = hasAttachment && config.features?.downloadMedia === false && shouldRespond
     ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` }
     : (hasAttachment
-        ? await resolveInboundMedia(config, firstAttachment, { download: shouldDownloadMedia })
+        ? await resolveInboundMedia(config, firstAttachment, { download: shouldDownloadMedia, message })
         : { filePath: null, note: null });
   const countNote = moreAttachmentsNote(attachments.length);
   const mediaNote = media.note ? `${media.note}${countNote}` : (countNote.trim() || null);
@@ -435,7 +447,7 @@ async function handleDirectMessage(message) {
   }
 
   const media = hasAttachment && config.features?.downloadMedia !== false
-    ? await resolveInboundMedia(config, firstAttachment, { download: true })
+    ? await resolveInboundMedia(config, firstAttachment, { download: true, message })
     : (hasAttachment ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` } : { filePath: null, note: null });
   const mediaNote = media.note ? `${media.note}${moreAttachmentsNote(attachments.length)}` : null;
   const historyText = mediaNote ? appendNote(text, mediaNote) : text;

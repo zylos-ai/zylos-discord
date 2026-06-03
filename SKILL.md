@@ -77,5 +77,8 @@ cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint
   sender policy.
 - **Reaction notices:** per-channel `reactionNotifyMode` can be `own` (default),
   `all`, or `off`; use `set-channel-reaction-notify` in the admin CLI.
+- **Voice STT:** inbound Discord voice-note attachments are transcribed inline
+  as `[Voice] ...` when `~/zylos/bin/transcribe` is available. Set
+  `voiceTranscription` to `disabled` to skip transcription.
 
 Run any script with `--help` for full options.

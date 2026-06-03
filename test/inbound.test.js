@@ -3,6 +3,7 @@ import { THINKING_REACTION } from '../src/lib/reactions.js';
 import {
   fetchIfPartial,
   resolveReplyContext,
+  shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
   shouldForwardReaction
@@ -95,6 +96,36 @@ describe('inbound helpers', () => {
     await expect(fetchIfPartial({ partial: false, id: 'cached' })).resolves.toMatchObject({ id: 'cached' });
     await expect(fetchIfPartial({ partial: true, fetch: vi.fn(async () => fetched) })).resolves.toBe(fetched);
     await expect(fetchIfPartial({ partial: true, fetch: vi.fn(async () => { throw new Error('gone'); }) })).resolves.toBeNull();
+  });
+
+  it('keeps media and voice downloads behind the existing response gate', () => {
+    expect(shouldDownloadInboundMedia({
+      shouldRespond: true,
+      hasAttachment: true,
+      downloadMediaEnabled: true,
+      smartNoMention: false
+    })).toBe(true);
+
+    expect(shouldDownloadInboundMedia({
+      shouldRespond: false,
+      hasAttachment: true,
+      downloadMediaEnabled: true,
+      smartNoMention: false
+    })).toBe(false);
+
+    expect(shouldDownloadInboundMedia({
+      shouldRespond: true,
+      hasAttachment: true,
+      downloadMediaEnabled: false,
+      smartNoMention: false
+    })).toBe(false);
+
+    expect(shouldDownloadInboundMedia({
+      shouldRespond: true,
+      hasAttachment: true,
+      downloadMediaEnabled: true,
+      smartNoMention: true
+    })).toBe(false);
   });
 
   it('forwards own-message reactions in own mode', () => {
