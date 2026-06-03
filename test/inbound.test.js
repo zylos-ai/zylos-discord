@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { THINKING_REACTION } from '../src/lib/reactions.js';
 import {
   fetchIfPartial,
+  getStickers,
   resolveReplyContext,
   shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
-  shouldForwardReaction
+  shouldForwardReaction,
+  stickersNote
 } from '../src/lib/inbound.js';
 
 function guildMessage({
@@ -129,6 +131,21 @@ describe('inbound helpers', () => {
       downloadMediaEnabled: true,
       smartNoMention: true
     })).toBe(false);
+  });
+
+  it('formats inbound sticker notes from Discord sticker collections', () => {
+    const stickers = new Map([
+      ['s1', { id: 's1', name: 'party <cat>' }],
+      ['s2', { id: 's2', name: 'wave' }]
+    ]);
+
+    expect(getStickers({ stickers })).toEqual([
+      { id: 's1', name: 'party <cat>' },
+      { id: 's2', name: 'wave' }
+    ]);
+    expect(stickersNote(getStickers({ stickers }))).toBe('[sticker: party <cat>] [+1 more stickers]');
+    expect(stickersNote([{ id: 's3' }])).toBe('[sticker: s3]');
+    expect(stickersNote([])).toBeNull();
   });
 
   it('forwards own-message reactions in own mode', () => {

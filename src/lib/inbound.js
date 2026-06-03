@@ -5,6 +5,24 @@ export function messageText(message) {
   return String(message?.cleanContent || message?.content || '');
 }
 
+export function getStickers(message) {
+  const stickers = message?.stickers;
+  if (!stickers) return [];
+  if (typeof stickers.values === 'function') return [...stickers.values()];
+  if (Array.isArray(stickers)) return stickers;
+  return [];
+}
+
+export function stickerName(sticker) {
+  return sticker?.name || sticker?.id || 'unknown';
+}
+
+export function stickersNote(stickers) {
+  if (!stickers?.length) return null;
+  const suffix = stickers.length > 1 ? ` [+${stickers.length - 1} more stickers]` : '';
+  return `[sticker: ${stickerName(stickers[0])}]${suffix}`;
+}
+
 export function displayName(user) {
   return user?.username || user?.globalName || String(user?.id || 'unknown');
 }

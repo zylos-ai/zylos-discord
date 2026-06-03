@@ -27,13 +27,15 @@ import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/
 import {
   displayName,
   fetchIfPartial,
+  getStickers,
   messageText,
   reactionEmoji,
   resolveReplyContext,
   shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
-  shouldForwardReaction
+  shouldForwardReaction,
+  stickersNote
 } from './lib/inbound.js';
 import { downloadAttachment } from './lib/media.js';
 import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
@@ -334,17 +336,19 @@ async function handleGuildMessage(message) {
   const attachments = getAttachments(message);
   const firstAttachment = attachments[0];
   const hasAttachment = attachments.length > 0;
+  const stickers = getStickers(message);
+  const hasSticker = stickers.length > 0;
 
   const userId = String(message.author.id);
   const access = resolveGuildAccess(config, policyChannelId, userId);
   if (!access.ok) return;
 
   const text = message.cleanContent || message.content || '';
-  if (!text.trim() && !hasAttachment) return;
+  if (!text.trim() && !hasAttachment && !hasSticker) return;
 
   const mentioned = message.mentions?.has?.(client.user) || false;
-  const shouldRespond = access.smart || mentioned;
-  if (!text.trim() && hasAttachment && !shouldRespond) return;
+  const shouldRespond = access.smart || mentioned || hasSticker;
+  if (!text.trim() && hasAttachment && !hasSticker && !shouldRespond) return;
 
   const smartNoMention = access.smart && !mentioned;
   const shouldDownloadMedia = shouldDownloadInboundMedia({
@@ -360,7 +364,9 @@ async function handleGuildMessage(message) {
         : { filePath: null, note: null });
   const countNote = moreAttachmentsNote(attachments.length);
   const mediaNote = media.note ? `${media.note}${countNote}` : (countNote.trim() || null);
-  const historyText = mediaNote ? appendNote(text, mediaNote) : text;
+  const stickerNote = stickersNote(stickers);
+  const noteText = stickerNote ? appendNote(text, stickerNote) : text;
+  const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
   if (!historyText.trim()) return;
 
   const limit = channelHistoryLimit(config, policyChannelId);
@@ -420,6 +426,8 @@ async function handleDirectMessage(message) {
   const attachments = getAttachments(message);
   const firstAttachment = attachments[0];
   const hasAttachment = attachments.length > 0;
+  const stickers = getStickers(message);
+  const hasSticker = stickers.length > 0;
 
   if (!hasOwner(config)) {
     bindOwnerIfUnset(config, userId);
@@ -436,12 +444,12 @@ async function handleDirectMessage(message) {
     return;
   }
 
-  if (!text.trim() && !hasAttachment) {
+  if (!text.trim() && !hasAttachment && !hasSticker) {
     await message.reply('Please send text or a file.').catch(() => {});
     return;
   }
 
-  if (hasAttachment && config.features?.downloadMedia === false && !text.trim()) {
+  if (hasAttachment && config.features?.downloadMedia === false && !text.trim() && !hasSticker) {
     await message.reply('Media downloads are disabled. Please send text.').catch(() => {});
     return;
   }
@@ -450,7 +458,9 @@ async function handleDirectMessage(message) {
     ? await resolveInboundMedia(config, firstAttachment, { download: true, message })
     : (hasAttachment ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` } : { filePath: null, note: null });
   const mediaNote = media.note ? `${media.note}${moreAttachmentsNote(attachments.length)}` : null;
-  const historyText = mediaNote ? appendNote(text, mediaNote) : text;
+  const stickerNote = stickersNote(stickers);
+  const noteText = stickerNote ? appendNote(text, stickerNote) : text;
+  const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
 
   const correlationId = `${message.channel.id}:${message.id}`;
   const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId });
