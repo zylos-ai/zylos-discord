@@ -209,7 +209,13 @@ async function resolveSendTarget() {
     return cachedSendTarget;
   }
 
-  const channel = await fetchChannel(endpoint.channelId);
+  let channel = null;
+  try {
+    channel = await fetchChannel(endpoint.channelId);
+  } catch {
+    cachedSendTarget = { channelId: endpoint.channelId, forumRoot: false };
+    return cachedSendTarget;
+  }
   cachedSendTarget = {
     channelId: endpoint.channelId,
     forumRoot: isForumRootChannel(channel)

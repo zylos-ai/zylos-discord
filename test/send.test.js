@@ -65,8 +65,9 @@ function parseRequestBody(req, bodyText) {
   return JSON.parse(bodyText);
 }
 
-async function withFakeServers(fn, { channelTypes = {} } = {}) {
+async function withFakeServers(fn, { channelTypes = {}, failChannelGets = [] } = {}) {
   const requests = [];
+  const failingGets = new Set(failChannelGets);
   let messageSeq = 0;
   let threadSeq = 0;
   const server = http.createServer((req, res) => {
@@ -84,6 +85,11 @@ async function withFakeServers(fn, { channelTypes = {} } = {}) {
 
       if (req.method === 'GET' && req.url?.startsWith('/channels/')) {
         const channelId = req.url.split('/')[2];
+        if (failingGets.has(channelId)) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'temporary failure' }));
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ id: channelId, type: channelTypes[channelId] ?? 0 }));
         return;
@@ -279,6 +285,23 @@ describe('send helpers', () => {
       });
       expect(requests.some((req) => req.url === '/channels/forum1/messages')).toBe(false);
     }, { channelTypes: { forum1: 15 } });
+  });
+
+  it('falls back to normal messages when channel type lookup fails', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['chan1', 'fallback send'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(requests.find((req) => req.method === 'GET' && req.url === '/channels/chan1')).toBeTruthy();
+      expect(requests.find((req) => req.url === '/channels/chan1/messages')?.body.content).toBe('fallback send');
+      expect(requests.some((req) => req.url === '/channels/chan1/threads')).toBe(false);
+    }, { failChannelGets: ['chan1'] });
   });
 
   it('caps forum thread titles at the Discord limit', async () => {
