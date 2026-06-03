@@ -228,6 +228,36 @@ async function clearReaction() {
   } catch {}
 }
 
+export async function clearThinkingReactions({
+  channelId = endpoint.channelId,
+  port = null,
+  botToken = null,
+  fetchImpl = fetch
+} = {}) {
+  if (!channelId) return false;
+
+  const resolvedToken = botToken || getResolvedBotToken();
+  const resolvedPort = port || getConfig().internalPort || 3475;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetchImpl(`http://127.0.0.1:${resolvedPort}/internal/clear-thinking`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Token': getInternalToken(resolvedToken)
+      },
+      body: JSON.stringify({ channelId }),
+      signal: controller.signal
+    });
+    return !!res?.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function recordOutgoing(text) {
   const botToken = getResolvedBotToken();
   const config = getConfig();
@@ -253,6 +283,7 @@ async function recordOutgoing(text) {
 
 async function cleanup() {
   if (correlationId) markTypingDone(correlationId);
+  await clearThinkingReactions();
   await clearReaction();
 }
 

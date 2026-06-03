@@ -9,11 +9,9 @@ import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
 import {
   bindOwnerIfUnset,
   hasOwner,
-  isChannelAllowed,
   isDmAuthorized,
   isOwner,
-  isSenderAllowed,
-  isSmartChannel
+  resolveGuildAccess
 } from './lib/auth.js';
 import { buildEndpoint, formatDmMessage, formatGroupMessage, sendToC4 } from './lib/c4.js';
 import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig } from './lib/config.js';
@@ -201,23 +199,18 @@ async function handleGuildMessage(message) {
   const firstAttachment = attachments[0];
   const hasAttachment = attachments.length > 0;
 
-  const allowed = isChannelAllowed(config, policyChannelId);
-  const smart = isSmartChannel(config, policyChannelId);
-  if (!allowed && !smart) return;
-
   const userId = String(message.author.id);
-  if (!isOwner(config, userId) && !isSenderAllowed(config, policyChannelId, userId)) {
-    return;
-  }
+  const access = resolveGuildAccess(config, policyChannelId, userId);
+  if (!access.ok) return;
 
   const text = message.cleanContent || message.content || '';
   if (!text.trim() && !hasAttachment) return;
 
   const mentioned = message.mentions?.has?.(client.user) || false;
-  const shouldRespond = smart || mentioned;
+  const shouldRespond = access.smart || mentioned;
   if (!text.trim() && hasAttachment && !shouldRespond) return;
 
-  const smartNoMention = smart && !mentioned;
+  const smartNoMention = access.smart && !mentioned;
   const shouldDownloadMedia = shouldRespond && hasAttachment && config.features?.downloadMedia !== false && !smartNoMention;
   const media = hasAttachment && config.features?.downloadMedia === false && shouldRespond
     ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` }

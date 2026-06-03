@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { DATA_DIR, getBotToken } from './config.js';
 import { appendToRing } from './context.js';
+import { clearThinkingReactionsForChannel } from './reactions.js';
 
 const LOG_DIR = path.join(DATA_DIR, 'logs', 'dm');
 const MAX_BODY_BYTES = 64 * 1024;
@@ -121,6 +122,34 @@ async function handleRecordOutgoing(req, res, internalToken) {
   }
 }
 
+async function handleClearThinking(req, res, internalToken) {
+  const suppliedToken = req.headers['x-internal-token'];
+  if (!timingSafeStringEqual(suppliedToken, internalToken)) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return;
+  }
+
+  try {
+    const body = await readJsonBody(req, res);
+    if (res.headersSent) return;
+    if (!body.channelId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'channelId is required' }));
+      return;
+    }
+
+    const result = await clearThinkingReactionsForChannel(body.channelId);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, ...result }));
+  } catch (err) {
+    if (!res.headersSent) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+}
+
 export function startRecordingServer({ port, internalToken = getInternalToken() }) {
   if (server) return server;
 
@@ -132,8 +161,13 @@ export function startRecordingServer({ port, internalToken = getInternalToken() 
   };
 
   server = http.createServer((req, res) => {
-    if (req.method === 'POST' && req.url === '/internal/record-outgoing') {
+    const pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (req.method === 'POST' && pathname === '/internal/record-outgoing') {
       handleRecordOutgoing(req, res, internalToken);
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/internal/clear-thinking') {
+      handleClearThinking(req, res, internalToken);
       return;
     }
 
