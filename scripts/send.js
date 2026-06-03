@@ -9,6 +9,7 @@
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ChannelType, Routes } from 'discord.js';
 import { getBotToken, getConfig } from '../src/lib/config.js';
 import { parseEndpoint } from '../src/lib/c4.js';
 import { markTypingDone, safeCorrelationId, THINKING_REACTION } from '../src/lib/reactions.js';
@@ -17,6 +18,7 @@ import { getInternalToken } from '../src/lib/recording.js';
 const API = process.env.DISCORD_API_BASE || 'https://discord.com/api/v10';
 const MAX_LENGTH = 2000;
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+const MAX_THREAD_TITLE_LENGTH = 100;
 const CHUNK_DELAY_MS = 400;
 const IS_DIRECT = process.argv[1] === fileURLToPath(import.meta.url);
 
@@ -43,6 +45,7 @@ if (IS_DIRECT && endpoint.req && !correlationId) {
 }
 
 let cachedBotToken = null;
+let cachedSendTarget = null;
 
 function getResolvedBotToken() {
   if (cachedBotToken === null) {
@@ -53,6 +56,10 @@ function getResolvedBotToken() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function channelUrl(channelId, suffix = '') {
+  return `${API}/channels/${channelId}${suffix}`;
 }
 
 export async function readStdin(stdin = process.stdin) {
@@ -132,6 +139,12 @@ export function applyTextMode(text, config = getConfig()) {
   }
 }
 
+export function deriveThreadTitle(text, fallback = 'New message') {
+  const firstLine = String(text ?? '').split(/\r?\n/, 1)[0].trim().replace(/\s+/g, ' ');
+  const title = firstLine || fallback;
+  return title.slice(0, MAX_THREAD_TITLE_LENGTH);
+}
+
 export function validateMediaFile(filePath, maxBytes = MAX_MEDIA_BYTES) {
   if (!fs.existsSync(filePath)) {
     throw new Error(`file not found: ${filePath}`);
@@ -162,7 +175,55 @@ async function discordRequest(url, options, { maxRetries = 2 } = {}) {
   }
 }
 
-async function sendDiscordMessage(content, { replyToId } = {}) {
+async function fetchChannel(channelId) {
+  const res = await discordRequest(channelUrl(channelId), {
+    method: 'GET',
+    headers: { Authorization: `Bot ${getResolvedBotToken()}` }
+  });
+
+  if (!res.ok) {
+    const err = new Error(`Discord API ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  return await res.json();
+}
+
+function isForumRootChannel(channel) {
+  return channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
+}
+
+function forumThreadReceipt(thread) {
+  if (!thread?.id) return thread;
+  return {
+    id: thread.message?.id || thread.last_message_id || thread.id,
+    channel_id: thread.id
+  };
+}
+
+async function resolveSendTarget() {
+  if (cachedSendTarget) return cachedSendTarget;
+  if (endpoint.msg) {
+    cachedSendTarget = { channelId: endpoint.channelId, forumRoot: false };
+    return cachedSendTarget;
+  }
+
+  let channel = null;
+  try {
+    channel = await fetchChannel(endpoint.channelId);
+  } catch {
+    cachedSendTarget = { channelId: endpoint.channelId, forumRoot: false };
+    return cachedSendTarget;
+  }
+  cachedSendTarget = {
+    channelId: endpoint.channelId,
+    forumRoot: isForumRootChannel(channel)
+  };
+  return cachedSendTarget;
+}
+
+async function sendDiscordMessage(content, { replyToId, channelId = endpoint.channelId } = {}) {
   const botToken = getResolvedBotToken();
   const body = {
     content,
@@ -172,7 +233,7 @@ async function sendDiscordMessage(content, { replyToId } = {}) {
     body.message_reference = { message_id: replyToId };
   }
 
-  const res = await discordRequest(`${API}/channels/${endpoint.channelId}/messages`, {
+  const res = await discordRequest(channelUrl(channelId, '/messages'), {
     method: 'POST',
     headers: {
       Authorization: `Bot ${botToken}`,
@@ -194,7 +255,73 @@ async function sendDiscordMessage(content, { replyToId } = {}) {
   }
 }
 
-async function uploadDiscordMedia(filePath, { replyToId } = {}) {
+async function createForumThread(content, { titleSource, fallbackTitle = 'New message' } = {}) {
+  const body = {
+    name: deriveThreadTitle(titleSource ?? content, fallbackTitle),
+    message: {
+      content,
+      allowed_mentions: { parse: [] }
+    }
+  };
+
+  const res = await discordRequest(`${API}${Routes.threads(endpoint.channelId)}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bot ${getResolvedBotToken()}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const err = new Error(`Discord API ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  try {
+    const thread = await res.json();
+    return forumThreadReceipt(thread);
+  } catch {
+    return null;
+  }
+}
+
+async function createForumThreadWithMedia(filePath, { fallbackTitle = 'Shared file' } = {}) {
+  validateMediaFile(filePath);
+
+  const payload = {
+    name: deriveThreadTitle('', fallbackTitle),
+    message: {
+      allowed_mentions: { parse: [] }
+    }
+  };
+
+  const form = new FormData();
+  form.append('payload_json', JSON.stringify(payload));
+  form.append('files[0]', new Blob([fs.readFileSync(filePath)]), path.basename(filePath));
+
+  const res = await discordRequest(`${API}${Routes.threads(endpoint.channelId)}`, {
+    method: 'POST',
+    headers: { Authorization: `Bot ${getResolvedBotToken()}` },
+    body: form
+  });
+
+  if (!res.ok) {
+    const err = new Error(`Discord API ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  try {
+    const thread = await res.json();
+    return forumThreadReceipt(thread);
+  } catch {
+    return null;
+  }
+}
+
+async function uploadDiscordMedia(filePath, { replyToId, channelId = endpoint.channelId } = {}) {
   validateMediaFile(filePath);
 
   const payload = {
@@ -208,7 +335,7 @@ async function uploadDiscordMedia(filePath, { replyToId } = {}) {
   form.append('payload_json', JSON.stringify(payload));
   form.append('files[0]', new Blob([fs.readFileSync(filePath)]), path.basename(filePath));
 
-  const res = await discordRequest(`${API}/channels/${endpoint.channelId}/messages`, {
+  const res = await discordRequest(channelUrl(channelId, '/messages'), {
     method: 'POST',
     headers: { Authorization: `Bot ${getResolvedBotToken()}` },
     body: form
@@ -227,21 +354,26 @@ async function uploadDiscordMedia(filePath, { replyToId } = {}) {
   }
 }
 
-async function sendText(text, { applyMode = true } = {}) {
+async function sendText(text, { applyMode = true, titleSource = text } = {}) {
   const chunks = splitMessage(applyMode ? applyTextMode(text) : text);
   if (chunks.length === 0) return;
 
   let receipt = null;
+  let channelId = endpoint.channelId;
+  const target = await resolveSendTarget();
   for (let i = 0; i < chunks.length; i += 1) {
     const isFirst = i === 0;
-    if (isFirst && endpoint.msg) {
+    if (isFirst && target.forumRoot) {
+      receipt = await createForumThread(chunks[i], { titleSource });
+      channelId = receipt?.channel_id || receipt?.id || channelId;
+    } else if (isFirst && endpoint.msg) {
       try {
-        receipt = await sendDiscordMessage(chunks[i], { replyToId: endpoint.msg });
+        receipt = await sendDiscordMessage(chunks[i], { replyToId: endpoint.msg, channelId });
       } catch {
-        receipt = await sendDiscordMessage(chunks[i]);
+        receipt = await sendDiscordMessage(chunks[i], { channelId });
       }
     } else {
-      receipt = await sendDiscordMessage(chunks[i]);
+      receipt = await sendDiscordMessage(chunks[i], { channelId });
     }
 
     if (i < chunks.length - 1) {
@@ -251,7 +383,12 @@ async function sendText(text, { applyMode = true } = {}) {
   return receipt;
 }
 
-async function sendMedia(filePath) {
+async function sendMedia(filePath, { fallbackTitle = 'Shared file' } = {}) {
+  const target = await resolveSendTarget();
+  if (target.forumRoot) {
+    return await createForumThreadWithMedia(filePath, { fallbackTitle });
+  }
+
   if (endpoint.msg) {
     try {
       return await uploadDiscordMedia(filePath, { replyToId: endpoint.msg });
@@ -371,7 +508,9 @@ async function main() {
     }
 
     if (media) {
-      const receipt = await sendMedia(media.filePath);
+      const receipt = await sendMedia(media.filePath, {
+        fallbackTitle: media.kind === 'image' ? 'Shared image' : 'Shared file'
+      });
       await recordOutgoing(`[sent a file: ${path.basename(media.filePath)}]`);
       await cleanup();
       printReceipt(receipt);
@@ -384,7 +523,9 @@ async function main() {
       throw new Error('invalid link message');
     }
 
-    const receipt = link ? await sendText(link.url, { applyMode: false }) : await sendText(message);
+    const receipt = link
+      ? await sendText(link.url, { applyMode: false, titleSource: link.url })
+      : await sendText(message);
     await recordOutgoing(message);
     await cleanup();
     printReceipt(receipt);

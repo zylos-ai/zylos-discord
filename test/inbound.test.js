@@ -12,6 +12,8 @@ import {
 function guildMessage({
   id = 'm1',
   channelId = 'chan1',
+  parentId = null,
+  thread = false,
   authorId = 'user1',
   bot = false,
   content = 'hello',
@@ -24,8 +26,9 @@ function guildMessage({
     author: { id: authorId, username: authorId, bot },
     channel: {
       id: channelId,
+      parentId,
       isDMBased: () => false,
-      isThread: () => false
+      isThread: () => thread
     },
     inGuild: () => true
   };
@@ -216,6 +219,46 @@ describe('inbound helpers', () => {
       config: config(),
       oldMessage: guildMessage({ content: 'same' }),
       newMessage: guildMessage({ content: 'same' }),
+      clientUserId: 'bot1'
+    })).toBe(false);
+  });
+
+  it('uses the parent forum channel for thread access gates', () => {
+    expect(shouldForwardMessageUpdate({
+      config: config({
+        channels: {
+          forum1: { mode: 'mention' }
+        }
+      }),
+      oldMessage: guildMessage({
+        channelId: 'thread1',
+        parentId: 'forum1',
+        thread: true,
+        content: 'old'
+      }),
+      newMessage: guildMessage({
+        channelId: 'thread1',
+        parentId: 'forum1',
+        thread: true,
+        content: 'new'
+      }),
+      clientUserId: 'bot1'
+    })).toBe(true);
+
+    expect(shouldForwardMessageUpdate({
+      config: config({ channels: {} }),
+      oldMessage: guildMessage({
+        channelId: 'thread1',
+        parentId: 'forum1',
+        thread: true,
+        content: 'old'
+      }),
+      newMessage: guildMessage({
+        channelId: 'thread1',
+        parentId: 'forum1',
+        thread: true,
+        content: 'new'
+      }),
       clientUserId: 'bot1'
     })).toBe(false);
   });
