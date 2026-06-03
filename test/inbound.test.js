@@ -4,6 +4,7 @@ import {
   fetchIfPartial,
   getStickers,
   resolveReplyContext,
+  resolveGuildMessageForwarding,
   shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
@@ -146,6 +147,47 @@ describe('inbound helpers', () => {
     expect(stickersNote(getStickers({ stickers }))).toBe('[sticker: party <cat>] [+1 more stickers]');
     expect(stickersNote([{ id: 's3' }])).toBe('[sticker: s3]');
     expect(stickersNote([])).toBeNull();
+  });
+
+  it('keeps sticker-only guild messages behind the mention-mode response gate', () => {
+    expect(resolveGuildMessageForwarding({
+      access: { smart: false },
+      mentioned: false,
+      text: '',
+      hasSticker: true
+    })).toEqual({
+      shouldRespond: false,
+      smartNoMention: false,
+      shouldForward: false
+    });
+  });
+
+  it('forwards mentioned sticker-only guild messages', () => {
+    expect(resolveGuildMessageForwarding({
+      access: { smart: false },
+      mentioned: true,
+      text: '',
+      hasSticker: true
+    })).toEqual({
+      shouldRespond: true,
+      smartNoMention: false,
+      shouldForward: true
+    });
+    expect(stickersNote([{ id: 's1', name: 'party' }])).toBe('[sticker: party]');
+  });
+
+  it('forwards smart-mode sticker-only guild messages with the smart hint state', () => {
+    expect(resolveGuildMessageForwarding({
+      access: { smart: true },
+      mentioned: false,
+      text: '',
+      hasSticker: true
+    })).toEqual({
+      shouldRespond: true,
+      smartNoMention: true,
+      shouldForward: true
+    });
+    expect(stickersNote([{ id: 's1', name: 'party' }])).toBe('[sticker: party]');
   });
 
   it('forwards own-message reactions in own mode', () => {

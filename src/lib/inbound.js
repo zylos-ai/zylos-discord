@@ -23,6 +23,24 @@ export function stickersNote(stickers) {
   return `[sticker: ${stickerName(stickers[0])}]${suffix}`;
 }
 
+export function resolveGuildMessageForwarding({
+  access,
+  mentioned = false,
+  text = '',
+  hasAttachment = false,
+  hasSticker = false
+}) {
+  const shouldRespond = !!(access?.smart || mentioned);
+  const smartNoMention = !!(access?.smart && !mentioned);
+  const mediaOnly = !String(text || '').trim() && (hasAttachment || hasSticker);
+
+  return {
+    shouldRespond,
+    smartNoMention,
+    shouldForward: !(mediaOnly && !shouldRespond)
+  };
+}
+
 export function displayName(user) {
   return user?.username || user?.globalName || String(user?.id || 'unknown');
 }

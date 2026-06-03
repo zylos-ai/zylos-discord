@@ -31,6 +31,7 @@ import {
   messageText,
   reactionEmoji,
   resolveReplyContext,
+  resolveGuildMessageForwarding,
   shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
@@ -347,17 +348,22 @@ async function handleGuildMessage(message) {
   if (!text.trim() && !hasAttachment && !hasSticker) return;
 
   const mentioned = message.mentions?.has?.(client.user) || false;
-  const shouldRespond = access.smart || mentioned || hasSticker;
-  if (!text.trim() && hasAttachment && !hasSticker && !shouldRespond) return;
+  const forwarding = resolveGuildMessageForwarding({
+    access,
+    mentioned,
+    text,
+    hasAttachment,
+    hasSticker
+  });
+  if (!forwarding.shouldForward) return;
 
-  const smartNoMention = access.smart && !mentioned;
   const shouldDownloadMedia = shouldDownloadInboundMedia({
-    shouldRespond,
+    shouldRespond: forwarding.shouldRespond,
     hasAttachment,
     downloadMediaEnabled: config.features?.downloadMedia !== false,
-    smartNoMention
+    smartNoMention: forwarding.smartNoMention
   });
-  const media = hasAttachment && config.features?.downloadMedia === false && shouldRespond
+  const media = hasAttachment && config.features?.downloadMedia === false && forwarding.shouldRespond
     ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` }
     : (hasAttachment
         ? await resolveInboundMedia(config, firstAttachment, { download: shouldDownloadMedia, message })
@@ -387,7 +393,7 @@ async function handleGuildMessage(message) {
     console.warn(`${LOG} failed to record incoming guild message: ${err.message}`);
   }
 
-  if (!shouldRespond) return;
+  if (!forwarding.shouldRespond) return;
 
   const correlationId = `${historyKey}:${message.id}`;
   const endpoint = buildEndpoint(historyKey, { messageId: message.id, correlationId });
@@ -396,7 +402,7 @@ async function handleGuildMessage(message) {
   const replyingTo = await resolveReplyContext(message);
 
   await setReaction(message);
-  if (!smartNoMention) {
+  if (!forwarding.smartNoMention) {
     startTyping(message.channel, correlationId);
   }
 
@@ -406,7 +412,7 @@ async function handleGuildMessage(message) {
     text: historyText,
     history,
     isThread,
-    smartHint: smartNoMention,
+    smartHint: forwarding.smartNoMention,
     filePath: media.filePath,
     replyingTo
   });
