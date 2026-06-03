@@ -49,6 +49,7 @@ describe('config', () => {
       features: { downloadMedia: true },
       media: { maxBytes: 10 * 1024 * 1024 },
       historyLimit: 5,
+      textMode: 'markdown',
       internalPort: 3475
     });
   });
@@ -68,7 +69,21 @@ describe('config', () => {
       botToken: 'from-config',
       applicationId: 'app-123',
       features: { downloadMedia: false },
-      historyLimit: 5
+      historyLimit: 5,
+      textMode: 'markdown'
+    });
+  });
+
+  it('normalizes unsupported textMode values to markdown', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      textMode: 'html'
+    }));
+
+    expect(mod.loadConfig()).toMatchObject({
+      textMode: 'markdown'
     });
   });
 

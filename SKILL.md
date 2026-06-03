@@ -65,8 +65,8 @@ Zylos agent over the C4 communication bridge.
 # Admin CLI -- manage owner, access policies, and per-channel allowlist
 node ~/zylos/.claude/skills/discord/src/admin.js --help
 
-# Outbound (used by C4 to deliver agent replies)
-node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint>" < message.txt
+# Outbound (used by C4 to deliver agent replies; message is read from stdin)
+cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint>"
 ```
 
 - **Connection:** Gateway WebSocket (discord.js v14). No webhook / Caddy route.

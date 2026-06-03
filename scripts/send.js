@@ -14,20 +14,22 @@ import { parseEndpoint } from '../src/lib/c4.js';
 import { markTypingDone, safeCorrelationId, THINKING_REACTION } from '../src/lib/reactions.js';
 import { getInternalToken } from '../src/lib/recording.js';
 
-const API = 'https://discord.com/api/v10';
+const API = process.env.DISCORD_API_BASE || 'https://discord.com/api/v10';
 const MAX_LENGTH = 2000;
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 const CHUNK_DELAY_MS = 400;
 const IS_DIRECT = process.argv[1] === fileURLToPath(import.meta.url);
 
 const args = process.argv.slice(2);
-if (IS_DIRECT && args.length < 2) {
-  console.error('Usage: send.js <endpoint_id> <message>');
+const shouldReadStdin = IS_DIRECT && args.length < 2 && !process.stdin.isTTY;
+if (IS_DIRECT && (!args[0] || (args.length < 2 && !shouldReadStdin))) {
+  console.error('Usage: send.js <endpoint_id> [message]');
   process.exit(1);
 }
 
 const endpoint = parseEndpoint(args[0]);
-const message = args.slice(1).join(' ');
+const argMessage = args.slice(1).join(' ');
+const message = shouldReadStdin ? await readStdin(process.stdin) : argMessage;
 const correlationId = safeCorrelationId(endpoint.req);
 
 if (IS_DIRECT && !endpoint.channelId) {
@@ -51,6 +53,14 @@ function getResolvedBotToken() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function readStdin(stdin = process.stdin) {
+  const chunks = [];
+  for await (const chunk of stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 export function splitMessage(text, maxLen = MAX_LENGTH) {
@@ -94,6 +104,32 @@ export function parseMediaMessage(text) {
   const filePath = match[2].trim();
   if (!filePath) return null;
   return { kind: match[1], filePath };
+}
+
+export function parseLinkMessage(text) {
+  const match = String(text || '').match(/^\[LINK](.+)$/);
+  if (!match) return null;
+  const url = match[1].trim();
+  if (!url) return null;
+  try {
+    return { url: new URL(url).href };
+  } catch {
+    return null;
+  }
+}
+
+export function escapeDiscordMarkdown(text) {
+  return String(text ?? '').replace(/([\\*_~`|>#])/g, '\\$1');
+}
+
+export function applyTextMode(text, config = getConfig()) {
+  try {
+    return config?.textMode === 'plain'
+      ? escapeDiscordMarkdown(text)
+      : String(text ?? '');
+  } catch {
+    return escapeDiscordMarkdown(text);
+  }
 }
 
 export function validateMediaFile(filePath, maxBytes = MAX_MEDIA_BYTES) {
@@ -150,6 +186,12 @@ async function sendDiscordMessage(content, { replyToId } = {}) {
     err.status = res.status;
     throw err;
   }
+
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 async function uploadDiscordMedia(filePath, { replyToId } = {}) {
@@ -177,43 +219,61 @@ async function uploadDiscordMedia(filePath, { replyToId } = {}) {
     err.status = res.status;
     throw err;
   }
+
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 async function sendText(text) {
-  const chunks = splitMessage(text);
+  const chunks = splitMessage(applyTextMode(text));
   if (chunks.length === 0) return;
 
+  let receipt = null;
   for (let i = 0; i < chunks.length; i += 1) {
     const isFirst = i === 0;
     if (isFirst && endpoint.msg) {
       try {
-        await sendDiscordMessage(chunks[i], { replyToId: endpoint.msg });
+        receipt = await sendDiscordMessage(chunks[i], { replyToId: endpoint.msg });
       } catch {
-        await sendDiscordMessage(chunks[i]);
+        receipt = await sendDiscordMessage(chunks[i]);
       }
     } else {
-      await sendDiscordMessage(chunks[i]);
+      receipt = await sendDiscordMessage(chunks[i]);
     }
 
     if (i < chunks.length - 1) {
       await sleep(CHUNK_DELAY_MS);
     }
   }
+  return receipt;
 }
 
 async function sendMedia(filePath) {
   if (endpoint.msg) {
     try {
-      await uploadDiscordMedia(filePath, { replyToId: endpoint.msg });
-      return;
+      return await uploadDiscordMedia(filePath, { replyToId: endpoint.msg });
     } catch (err) {
       if (!err.status) throw err;
-      await uploadDiscordMedia(filePath);
-      return;
+      return await uploadDiscordMedia(filePath);
     }
   }
 
-  await uploadDiscordMedia(filePath);
+  return await uploadDiscordMedia(filePath);
+}
+
+export function formatReceipt(receipt, fallbackChannelId = endpoint.channelId) {
+  const messageId = receipt?.id ? String(receipt.id) : null;
+  const channelId = receipt?.channel_id ? String(receipt.channel_id) : String(fallbackChannelId || '');
+  if (!messageId || !channelId) return null;
+  return `RECEIPT ${JSON.stringify({ messageId, channelId })}`;
+}
+
+function printReceipt(receipt) {
+  const line = formatReceipt(receipt);
+  if (line) console.log(line);
 }
 
 async function clearReaction() {
@@ -311,16 +371,23 @@ async function main() {
     }
 
     if (media) {
-      await sendMedia(media.filePath);
+      const receipt = await sendMedia(media.filePath);
       await recordOutgoing(`[sent a file: ${path.basename(media.filePath)}]`);
       await cleanup();
+      printReceipt(receipt);
       console.log('Media sent successfully');
       return;
     }
 
-    await sendText(message);
+    const link = parseLinkMessage(message);
+    if (message.startsWith('[LINK]') && !link) {
+      throw new Error('invalid link message');
+    }
+
+    const receipt = link ? await sendText(link.url) : await sendText(message);
     await recordOutgoing(message);
     await cleanup();
+    printReceipt(receipt);
     console.log('Message sent successfully');
   } catch (err) {
     await cleanup();
