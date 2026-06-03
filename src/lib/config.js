@@ -28,6 +28,7 @@ export const DEFAULT_CONFIG = {
   historyLimit: 5,
   textMode: 'markdown',
   reactionNotifyMode: 'own',
+  voiceTranscription: 'auto',
   internalPort: 3475
 };
 
@@ -79,6 +80,15 @@ function deepMerge(defaults, overrides = {}) {
   return result;
 }
 
+function normalizeVoiceTranscription(value) {
+  if (value === false) return 'disabled';
+  if (value === true) return DEFAULT_CONFIG.voiceTranscription;
+  const normalized = String(value || DEFAULT_CONFIG.voiceTranscription).trim().toLowerCase();
+  return ['auto', 'local', 'disabled'].includes(normalized)
+    ? normalized
+    : DEFAULT_CONFIG.voiceTranscription;
+}
+
 export function mergeConfigWithDefaults(parsed = {}) {
   const normalized = { ...parsed };
   if (!normalized.botToken && parsed.bot_token) {
@@ -93,6 +103,7 @@ export function mergeConfigWithDefaults(parsed = {}) {
   if (normalized.reactionNotifyMode && !['off', 'own', 'all'].includes(normalized.reactionNotifyMode)) {
     normalized.reactionNotifyMode = DEFAULT_CONFIG.reactionNotifyMode;
   }
+  normalized.voiceTranscription = normalizeVoiceTranscription(normalized.voiceTranscription);
   if (normalized.channels && typeof normalized.channels === 'object' && !Array.isArray(normalized.channels)) {
     for (const channel of Object.values(normalized.channels)) {
       if (channel?.reactionNotifyMode && !['off', 'own', 'all'].includes(channel.reactionNotifyMode)) {

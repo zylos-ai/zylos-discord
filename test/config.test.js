@@ -51,6 +51,7 @@ describe('config', () => {
       historyLimit: 5,
       textMode: 'markdown',
       reactionNotifyMode: 'own',
+      voiceTranscription: 'auto',
       internalPort: 3475
     });
   });
@@ -72,7 +73,8 @@ describe('config', () => {
       features: { downloadMedia: false },
       historyLimit: 5,
       textMode: 'markdown',
-      reactionNotifyMode: 'own'
+      reactionNotifyMode: 'own',
+      voiceTranscription: 'auto'
     });
   });
 
@@ -105,6 +107,32 @@ describe('config', () => {
       channels: {
         chan1: { reactionNotifyMode: 'own' }
       }
+    });
+  });
+
+  it('normalizes unsupported voiceTranscription values to auto', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      voiceTranscription: 'api'
+    }));
+
+    expect(mod.loadConfig()).toMatchObject({
+      voiceTranscription: 'auto'
+    });
+  });
+
+  it('normalizes boolean voiceTranscription compatibility values', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      voiceTranscription: false
+    }));
+
+    expect(mod.loadConfig()).toMatchObject({
+      voiceTranscription: 'disabled'
     });
   });
 

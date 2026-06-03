@@ -26,6 +26,15 @@ export function isMessageAuthorized(config, message, userId) {
   return false;
 }
 
+export function shouldDownloadInboundMedia({
+  shouldRespond,
+  hasAttachment,
+  downloadMediaEnabled = true,
+  smartNoMention = false
+}) {
+  return !!shouldRespond && !!hasAttachment && downloadMediaEnabled !== false && !smartNoMention;
+}
+
 export async function fetchIfPartial(entity) {
   if (!entity?.partial) return entity;
   if (typeof entity.fetch !== 'function') return null;

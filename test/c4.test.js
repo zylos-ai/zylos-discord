@@ -95,6 +95,17 @@ describe('c4 helpers', () => {
     expect(result).not.toContain('<group-context>');
   });
 
+  it('keeps voice transcript inline while retaining file path', () => {
+    const result = formatDmMessage({
+      username: 'Felix',
+      text: '[Voice] hello from audio',
+      filePath: '/tmp/voice.ogg'
+    });
+
+    expect(result).toContain('<current-message>\n[Voice] hello from audio\n</current-message>');
+    expect(result).toContain('---- file: /tmp/voice.ogg');
+  });
+
   it('omits reply context when no reference is provided', () => {
     const result = formatGroupMessage({
       channelName: 'general',
