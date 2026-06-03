@@ -75,5 +75,7 @@ cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint
 - **Guild access:** the owner may use server channels even when `groupPolicy`
   is `disabled`; non-owner server access still follows configured channel and
   sender policy.
+- **Reaction notices:** per-channel `reactionNotifyMode` can be `own` (default),
+  `all`, or `off`; use `set-channel-reaction-notify` in the admin CLI.
 
 Run any script with `--help` for full options.

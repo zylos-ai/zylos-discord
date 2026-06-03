@@ -27,6 +27,7 @@ export const DEFAULT_CONFIG = {
   media: { maxBytes: 10 * 1024 * 1024 },
   historyLimit: 5,
   textMode: 'markdown',
+  reactionNotifyMode: 'own',
   internalPort: 3475
 };
 
@@ -88,6 +89,16 @@ export function mergeConfigWithDefaults(parsed = {}) {
   }
   if (normalized.textMode && !['plain', 'markdown'].includes(normalized.textMode)) {
     normalized.textMode = DEFAULT_CONFIG.textMode;
+  }
+  if (normalized.reactionNotifyMode && !['off', 'own', 'all'].includes(normalized.reactionNotifyMode)) {
+    normalized.reactionNotifyMode = DEFAULT_CONFIG.reactionNotifyMode;
+  }
+  if (normalized.channels && typeof normalized.channels === 'object' && !Array.isArray(normalized.channels)) {
+    for (const channel of Object.values(normalized.channels)) {
+      if (channel?.reactionNotifyMode && !['off', 'own', 'all'].includes(channel.reactionNotifyMode)) {
+        channel.reactionNotifyMode = DEFAULT_CONFIG.reactionNotifyMode;
+      }
+    }
   }
 
   return deepMerge(DEFAULT_CONFIG, normalized);

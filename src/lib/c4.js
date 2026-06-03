@@ -40,14 +40,35 @@ function appendFilePath(content, filePath) {
   return `${content}\n---- file: ${escapeXml(filePath)}`;
 }
 
-export function formatDmMessage({ username, text, filePath = null }) {
+export function truncateText(text, maxLen = 100) {
+  const input = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (input.length <= maxLen) return input;
+  return `${input.slice(0, Math.max(0, maxLen - 3))}...`;
+}
+
+export function formatReplyingTo(replyingTo) {
+  if (!replyingTo?.messageId) return null;
+  const attrs = [
+    `message-id="${escapeXml(replyingTo.messageId)}"`
+  ];
+  if (replyingTo.fromUserId) {
+    attrs.push(`from-user-id="${escapeXml(replyingTo.fromUserId)}"`);
+  }
+  return `<replying-to ${attrs.join(' ')}>${escapeXml(truncateText(replyingTo.text))}</replying-to>`;
+}
+
+export function formatDmMessage({ username, text, filePath = null, replyingTo = null }) {
+  const parts = [`[DISCORD DM] ${escapeXml(username)} said:`];
+  const replyContext = formatReplyingTo(replyingTo);
+  if (replyContext) parts.push(replyContext);
+  parts.push(`<current-message>\n${escapeXml(text)}\n</current-message>`);
   return appendFilePath(
-    `[DISCORD DM] ${escapeXml(username)} said: <current-message>\n${escapeXml(text)}\n</current-message>`,
+    parts.join('\n'),
     filePath
   );
 }
 
-export function formatGroupMessage({ channelName, username, text, history = [], isThread = false, smartHint = false, filePath = null }) {
+export function formatGroupMessage({ channelName, username, text, history = [], isThread = false, smartHint = false, filePath = null, replyingTo = null }) {
   const label = isThread ? 'THREAD' : 'GROUP';
   const contextTag = isThread ? 'thread-context' : 'group-context';
   const parts = [`[DISCORD ${label}:${escapeXml(channelName)}] ${escapeXml(username)} said:`];
@@ -64,8 +85,25 @@ export function formatGroupMessage({ channelName, username, text, history = [], 
     parts.push('<smart-mode>\nDecide whether to respond. Reply with exactly [SKIP] to stay silent if this message is not for you or does not need you.\n</smart-mode>');
   }
 
+  const replyContext = formatReplyingTo(replyingTo);
+  if (replyContext) parts.push(replyContext);
+
   parts.push(`<current-message>\n${escapeXml(text)}\n</current-message>`);
   return appendFilePath(parts.join('\n'), filePath);
+}
+
+export function formatReactionEvent({ username, action, emoji, targetText }) {
+  return `[DISCORD REACTION] ${escapeXml(username)} ${escapeXml(action)} ${escapeXml(emoji)} to "${escapeXml(truncateText(targetText, 80))}"`;
+}
+
+export function formatMessageEditEvent({ username, oldText = '', newText = '' }) {
+  const oldPart = oldText ? ` from "${escapeXml(truncateText(oldText, 80))}"` : '';
+  return `[DISCORD EDIT] ${escapeXml(username)} edited a message${oldPart} to "${escapeXml(truncateText(newText, 120))}"`;
+}
+
+export function formatMessageDeleteEvent({ username, text = '' }) {
+  const suffix = text ? `: "${escapeXml(truncateText(text, 120))}"` : '';
+  return `[DISCORD DELETE] ${escapeXml(username)} deleted a message${suffix}`;
 }
 
 function parseC4Response(stdout) {

@@ -10,13 +10,30 @@ import {
   bindOwnerIfUnset,
   hasOwner,
   isDmAuthorized,
-  isOwner,
   resolveGuildAccess
 } from './lib/auth.js';
-import { buildEndpoint, formatDmMessage, formatGroupMessage, sendToC4 } from './lib/c4.js';
+import {
+  buildEndpoint,
+  formatDmMessage,
+  formatGroupMessage,
+  formatMessageDeleteEvent,
+  formatMessageEditEvent,
+  formatReactionEvent,
+  sendToC4
+} from './lib/c4.js';
 import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig } from './lib/config.js';
 import { channelHistoryLimit, ensureReplay, getHistory } from './lib/context.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
+import {
+  displayName,
+  fetchIfPartial,
+  messageText,
+  reactionEmoji,
+  resolveReplyContext,
+  shouldForwardMessageDelete,
+  shouldForwardMessageUpdate,
+  shouldForwardReaction
+} from './lib/inbound.js';
 import { downloadAttachment } from './lib/media.js';
 import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
 import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib/recording.js';
@@ -53,9 +70,10 @@ async function main() {
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.DirectMessages,
-      GatewayIntentBits.GuildMessageReactions
+      GatewayIntentBits.GuildMessageReactions,
+      GatewayIntentBits.DirectMessageReactions
     ],
-    partials: [Partials.Channel, Partials.Message, Partials.Reaction]
+    partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User]
   });
 
   client.once(Events.ClientReady, (readyClient) => {
@@ -75,6 +93,30 @@ async function main() {
         console.error(`${LOG} guild handler failed: ${err.message}`);
       });
     }
+  });
+
+  client.on(Events.MessageReactionAdd, (reaction, user) => {
+    handleReactionEvent(reaction, user, 'added').catch((err) => {
+      console.error(`${LOG} reaction add handler failed: ${err.message}`);
+    });
+  });
+
+  client.on(Events.MessageReactionRemove, (reaction, user) => {
+    handleReactionEvent(reaction, user, 'removed').catch((err) => {
+      console.error(`${LOG} reaction remove handler failed: ${err.message}`);
+    });
+  });
+
+  client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
+    handleMessageUpdate(oldMessage, newMessage).catch((err) => {
+      console.error(`${LOG} message update handler failed: ${err.message}`);
+    });
+  });
+
+  client.on(Events.MessageDelete, (message) => {
+    handleMessageDelete(message).catch((err) => {
+      console.error(`${LOG} message delete handler failed: ${err.message}`);
+    });
   });
 
   client.on(Events.Error, (err) => {
@@ -170,6 +212,25 @@ function appendNote(text, note) {
   return cleanText ? `${cleanText} ${note}` : note;
 }
 
+function eventEndpoint(message, kind) {
+  const channelId = message?.channel?.id;
+  const messageId = message?.id;
+  if (!channelId || !messageId) return null;
+  return buildEndpoint(channelId, {
+    messageId,
+    correlationId: `${channelId}:${messageId}:${kind}`
+  });
+}
+
+function sendDiscordEvent(message, kind, content) {
+  const endpoint = eventEndpoint(message, kind);
+  if (!endpoint) return false;
+  sendToC4('discord', endpoint, content, (errMsg) => {
+    console.warn(`${LOG} C4 rejected ${kind} event: ${errMsg}`);
+  });
+  return true;
+}
+
 async function resolveInboundMedia(config, attachment, { download }) {
   if (!attachment) return { filePath: null, note: null };
 
@@ -188,6 +249,74 @@ async function resolveInboundMedia(config, attachment, { download }) {
     console.warn(`${LOG} failed to download attachment: ${err.message}`);
     return { filePath: null, note: `[attachment skipped: download failed: ${name}]` };
   }
+}
+
+async function handleReactionEvent(reaction, user, action) {
+  const fetchedReaction = await fetchIfPartial(reaction);
+  if (!fetchedReaction?.message) return;
+  const message = await fetchIfPartial(fetchedReaction.message);
+  if (!message?.channel) return;
+
+  const config = loadConfig();
+  const reactionForCheck = { emoji: fetchedReaction.emoji, message };
+  if (!shouldForwardReaction({
+    config,
+    reaction: reactionForCheck,
+    user,
+    clientUserId: client.user?.id
+  })) {
+    return;
+  }
+
+  const content = formatReactionEvent({
+    username: displayName(user),
+    action,
+    emoji: reactionEmoji(fetchedReaction),
+    targetText: messageText(message) || '[no text]'
+  });
+  sendDiscordEvent(message, `reaction:${action}:${user?.id || ''}`, content);
+}
+
+async function handleMessageUpdate(oldMessage, newMessage) {
+  const fetchedNew = await fetchIfPartial(newMessage);
+  if (!fetchedNew?.channel) return;
+
+  const config = loadConfig();
+  if (!shouldForwardMessageUpdate({
+    config,
+    oldMessage,
+    newMessage: fetchedNew,
+    clientUserId: client.user?.id
+  })) {
+    return;
+  }
+
+  const content = formatMessageEditEvent({
+    username: displayName(fetchedNew.author || oldMessage?.author),
+    oldText: messageText(oldMessage),
+    newText: messageText(fetchedNew)
+  });
+  sendDiscordEvent(fetchedNew, 'edit', content);
+}
+
+async function handleMessageDelete(message) {
+  const fetchedMessage = await fetchIfPartial(message);
+  if (!fetchedMessage?.channel) return;
+
+  const config = loadConfig();
+  if (!shouldForwardMessageDelete({
+    config,
+    message: fetchedMessage,
+    clientUserId: client.user?.id
+  })) {
+    return;
+  }
+
+  const content = formatMessageDeleteEvent({
+    username: displayName(fetchedMessage.author),
+    text: messageText(fetchedMessage)
+  });
+  sendDiscordEvent(fetchedMessage, 'delete', content);
 }
 
 async function handleGuildMessage(message) {
@@ -246,6 +375,7 @@ async function handleGuildMessage(message) {
   const endpoint = buildEndpoint(historyKey, { messageId: message.id, correlationId });
   const channelName = resolveChannelName(config, message, policyChannelId, isThread);
   const history = getHistory(historyKey, message.id, limit);
+  const replyingTo = await resolveReplyContext(message);
 
   await setReaction(message);
   if (!smartNoMention) {
@@ -259,7 +389,8 @@ async function handleGuildMessage(message) {
     history,
     isThread,
     smartHint: smartNoMention,
-    filePath: media.filePath
+    filePath: media.filePath,
+    replyingTo
   });
 
   sendToC4('discord', endpoint, content, async (errMsg) => {
@@ -327,7 +458,8 @@ async function handleDirectMessage(message) {
   await setReaction(message);
   startTyping(message.channel, correlationId);
 
-  const content = formatDmMessage({ username, text: historyText, filePath: media.filePath });
+  const replyingTo = await resolveReplyContext(message);
+  const content = formatDmMessage({ username, text: historyText, filePath: media.filePath, replyingTo });
   sendToC4('discord', endpoint, content, async (errMsg) => {
     stopTyping(correlationId);
     await clearReaction(message);
