@@ -12,6 +12,7 @@ import {
   formatReceipt,
   parseLinkMessage,
   parseMediaMessage,
+  parsePollMessage,
   splitMessage,
   validateMediaFile
 } from '../scripts/send.js';
@@ -146,8 +147,10 @@ describe('send helpers', () => {
   it('parses supported media messages only', () => {
     expect(parseMediaMessage('[MEDIA:image]/tmp/a.png')).toEqual({ kind: 'image', filePath: '/tmp/a.png' });
     expect(parseMediaMessage('[MEDIA:file]  /tmp/a.pdf  ')).toEqual({ kind: 'file', filePath: '/tmp/a.pdf' });
+    expect(parseMediaMessage('[MEDIA:sticker]123456789012345678')).toEqual({ kind: 'sticker', stickerId: '123456789012345678' });
     expect(parseMediaMessage('[MEDIA:audio]/tmp/a.mp3')).toBeNull();
     expect(parseMediaMessage('[MEDIA:file]   ')).toBeNull();
+    expect(parseMediaMessage('[MEDIA:sticker]not-a-snowflake')).toBeNull();
   });
 
   it('parses valid link messages only', () => {
@@ -155,6 +158,33 @@ describe('send helpers', () => {
     expect(parseLinkMessage('[LINK]   ')).toBeNull();
     expect(parseLinkMessage('[LINK]not a url')).toBeNull();
     expect(parseLinkMessage('https://example.com')).toBeNull();
+  });
+
+  it('parses valid poll messages only', () => {
+    expect(parsePollMessage(`[POLL]
+Lunch?
+- Pizza
+- Sushi
+duration: 12
+multiselect: yes`)).toEqual({
+      question: 'Lunch?',
+      answers: ['Pizza', 'Sushi'],
+      duration: 12,
+      allowMultiselect: true,
+      poll: {
+        question: { text: 'Lunch?' },
+        answers: [
+          { poll_media: { text: 'Pizza' } },
+          { poll_media: { text: 'Sushi' } }
+        ],
+        duration: 12,
+        allow_multiselect: true
+      }
+    });
+    expect(parsePollMessage('[POLL]\nQuestion?\n- One')).toBeNull();
+    expect(parsePollMessage('[POLL]\nQuestion?\n- One\n- Two\nduration: 0')).toBeNull();
+    expect(parsePollMessage('[POLL]\nQuestion?\n- One\n- Two\nmultiselect: maybe')).toBeNull();
+    expect(parsePollMessage('Question?\n- One\n- Two')).toBeNull();
   });
 
   it('formats parseable receipts', () => {
@@ -346,6 +376,46 @@ describe('send helpers', () => {
     }, { channelTypes: { media1: 16 } });
   });
 
+  it('sends stickers as sticker_ids with receipts', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['chan1', '[MEDIA:sticker]123456789012345678'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('RECEIPT {"messageId":"sent-1","channelId":"chan1"}');
+      expect(requests.find((req) => req.url === '/channels/chan1/messages')?.body).toEqual({
+        sticker_ids: ['123456789012345678'],
+        allowed_mentions: { parse: [] }
+      });
+    });
+  });
+
+  it('creates forum threads for stickers with fallback titles', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['forum1', '[MEDIA:sticker]123456789012345678'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(requests.find((req) => req.url === '/channels/forum1/threads')?.body).toEqual({
+        name: 'Sticker',
+        message: {
+          sticker_ids: ['123456789012345678'],
+          allowed_mentions: { parse: [] }
+        }
+      });
+    }, { channelTypes: { forum1: 15 } });
+  });
+
   it('posts replies into existing thread channels without creating a forum thread', async () => {
     await withFakeServers(async ({ port, requests }) => {
       const home = makeHome({ port });
@@ -365,6 +435,77 @@ describe('send helpers', () => {
         message_reference: { message_id: 'parent-msg' }
       });
     });
+  });
+
+  it('sends native polls and rejects malformed poll blocks', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['chan1', `[POLL]
+Lunch?
+- Pizza
+- Sushi
+duration: 2
+multiselect: false`], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+      const bad = await runSend(['chan1', '[POLL]\nLunch?\n- Pizza'], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(requests.find((req) => req.url === '/channels/chan1/messages')?.body).toEqual({
+        poll: {
+          question: { text: 'Lunch?' },
+          answers: [
+            { poll_media: { text: 'Pizza' } },
+            { poll_media: { text: 'Sushi' } }
+          ],
+          duration: 2,
+          allow_multiselect: false
+        },
+        allowed_mentions: { parse: [] }
+      });
+      expect(bad.code).toBe(1);
+      expect(bad.stderr).toContain('invalid poll message');
+    });
+  });
+
+  it('creates forum threads for native polls', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['forum1', `[POLL]
+Release now?
+- Yes
+- No`], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(requests.find((req) => req.url === '/channels/forum1/threads')?.body).toEqual({
+        name: 'Release now?',
+        message: {
+          poll: {
+            question: { text: 'Release now?' },
+            answers: [
+              { poll_media: { text: 'Yes' } },
+              { poll_media: { text: 'No' } }
+            ],
+            duration: 24,
+            allow_multiselect: false
+          },
+          allowed_mentions: { parse: [] }
+        }
+      });
+    }, { channelTypes: { forum1: 15 } });
   });
 
   it('preserves link handling and plain text mode on forum thread sends', async () => {

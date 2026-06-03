@@ -19,6 +19,9 @@ const API = process.env.DISCORD_API_BASE || 'https://discord.com/api/v10';
 const MAX_LENGTH = 2000;
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
 const MAX_THREAD_TITLE_LENGTH = 100;
+const MAX_POLL_QUESTION_LENGTH = 300;
+const MAX_POLL_ANSWER_LENGTH = 55;
+const MAX_POLL_DURATION_HOURS = 32 * 24;
 const CHUNK_DELAY_MS = 400;
 const IS_DIRECT = process.argv[1] === fileURLToPath(import.meta.url);
 
@@ -106,11 +109,15 @@ export function splitMessage(text, maxLen = MAX_LENGTH) {
 }
 
 export function parseMediaMessage(text) {
-  const match = String(text || '').match(/^\[MEDIA:(image|file)](.+)$/);
+  const match = String(text || '').match(/^\[MEDIA:(image|file|sticker)](.+)$/);
   if (!match) return null;
-  const filePath = match[2].trim();
-  if (!filePath) return null;
-  return { kind: match[1], filePath };
+  const value = match[2].trim();
+  if (!value) return null;
+  if (match[1] === 'sticker') {
+    if (!/^\d{17,20}$/.test(value)) return null;
+    return { kind: 'sticker', stickerId: value };
+  }
+  return { kind: match[1], filePath: value };
 }
 
 export function parseLinkMessage(text) {
@@ -137,6 +144,80 @@ export function applyTextMode(text, config = getConfig()) {
   } catch {
     return escapeDiscordMarkdown(text);
   }
+}
+
+function parseBoolean(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['true', 'yes', 'y', '1', 'on'].includes(normalized)) return true;
+  if (['false', 'no', 'n', '0', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+export function parsePollMessage(text) {
+  const input = String(text || '').trim();
+  if (!input.startsWith('[POLL]')) return null;
+
+  const lines = input.slice('[POLL]'.length).split(/\r?\n/).map((line) => line.trim());
+  let question = '';
+  const answers = [];
+  let duration = 24;
+  let allowMultiselect = false;
+
+  for (const line of lines) {
+    if (!line) continue;
+    const durationMatch = line.match(/^duration:\s*(\d+)\s*$/i);
+    if (durationMatch) {
+      duration = Number(durationMatch[1]);
+      continue;
+    }
+
+    const multiselectMatch = line.match(/^multiselect:\s*(.+)$/i);
+    if (multiselectMatch) {
+      const parsed = parseBoolean(multiselectMatch[1]);
+      if (parsed === null) return null;
+      allowMultiselect = parsed;
+      continue;
+    }
+
+    const answerMatch = line.match(/^-\s+(.+)$/);
+    if (answerMatch) {
+      answers.push(answerMatch[1].trim());
+      continue;
+    }
+
+    if (!question) {
+      question = line;
+      continue;
+    }
+
+    question = `${question} ${line}`.trim();
+  }
+
+  if (
+    !question ||
+    question.length > MAX_POLL_QUESTION_LENGTH ||
+    answers.length < 2 ||
+    answers.length > 10 ||
+    answers.some((answer) => !answer || answer.length > MAX_POLL_ANSWER_LENGTH) ||
+    !Number.isInteger(duration) ||
+    duration < 1 ||
+    duration > MAX_POLL_DURATION_HOURS
+  ) {
+    return null;
+  }
+
+  return {
+    question,
+    answers,
+    duration,
+    allowMultiselect,
+    poll: {
+      question: { text: question },
+      answers: answers.map((answer) => ({ poll_media: { text: answer } })),
+      duration,
+      allow_multiselect: allowMultiselect
+    }
+  };
 }
 
 export function deriveThreadTitle(text, fallback = 'New message') {
@@ -223,10 +304,10 @@ async function resolveSendTarget() {
   return cachedSendTarget;
 }
 
-async function sendDiscordMessage(content, { replyToId, channelId = endpoint.channelId } = {}) {
+async function sendDiscordPayload(payload, { replyToId, channelId = endpoint.channelId } = {}) {
   const botToken = getResolvedBotToken();
   const body = {
-    content,
+    ...payload,
     allowed_mentions: { parse: [] }
   };
   if (replyToId) {
@@ -255,11 +336,15 @@ async function sendDiscordMessage(content, { replyToId, channelId = endpoint.cha
   }
 }
 
-async function createForumThread(content, { titleSource, fallbackTitle = 'New message' } = {}) {
+async function sendDiscordMessage(content, { replyToId, channelId = endpoint.channelId } = {}) {
+  return await sendDiscordPayload({ content }, { replyToId, channelId });
+}
+
+async function createForumThreadWithPayload(payload, { titleSource, fallbackTitle = 'New message' } = {}) {
   const body = {
-    name: deriveThreadTitle(titleSource ?? content, fallbackTitle),
+    name: deriveThreadTitle(titleSource, fallbackTitle),
     message: {
-      content,
+      ...payload,
       allowed_mentions: { parse: [] }
     }
   };
@@ -285,6 +370,10 @@ async function createForumThread(content, { titleSource, fallbackTitle = 'New me
   } catch {
     return null;
   }
+}
+
+async function createForumThread(content, { titleSource, fallbackTitle = 'New message' } = {}) {
+  return await createForumThreadWithPayload({ content }, { titleSource: titleSource ?? content, fallbackTitle });
 }
 
 async function createForumThreadWithMedia(filePath, { fallbackTitle = 'Shared file' } = {}) {
@@ -319,6 +408,38 @@ async function createForumThreadWithMedia(filePath, { fallbackTitle = 'Shared fi
   } catch {
     return null;
   }
+}
+
+async function sendPayload(payload, { titleSource, fallbackTitle = 'New message' } = {}) {
+  const target = await resolveSendTarget();
+  if (target.forumRoot) {
+    return await createForumThreadWithPayload(payload, { titleSource, fallbackTitle });
+  }
+
+  if (endpoint.msg) {
+    try {
+      return await sendDiscordPayload(payload, { replyToId: endpoint.msg });
+    } catch (err) {
+      if (!err.status) throw err;
+      return await sendDiscordPayload(payload);
+    }
+  }
+
+  return await sendDiscordPayload(payload);
+}
+
+async function sendSticker(stickerId) {
+  return await sendPayload(
+    { sticker_ids: [stickerId] },
+    { titleSource: '', fallbackTitle: 'Sticker' }
+  );
+}
+
+async function sendPoll(pollMessage) {
+  return await sendPayload(
+    { poll: pollMessage.poll },
+    { titleSource: pollMessage.question, fallbackTitle: 'Poll' }
+  );
 }
 
 async function uploadDiscordMedia(filePath, { replyToId, channelId = endpoint.channelId } = {}) {
@@ -508,6 +629,15 @@ async function main() {
     }
 
     if (media) {
+      if (media.kind === 'sticker') {
+        const receipt = await sendSticker(media.stickerId);
+        await recordOutgoing(`[sent a sticker: ${media.stickerId}]`);
+        await cleanup();
+        printReceipt(receipt);
+        console.log('Sticker sent successfully');
+        return;
+      }
+
       const receipt = await sendMedia(media.filePath, {
         fallbackTitle: media.kind === 'image' ? 'Shared image' : 'Shared file'
       });
@@ -521,6 +651,20 @@ async function main() {
     const link = parseLinkMessage(message);
     if (message.startsWith('[LINK]') && !link) {
       throw new Error('invalid link message');
+    }
+
+    const poll = parsePollMessage(message);
+    if (message.trim().startsWith('[POLL]') && !poll) {
+      throw new Error('invalid poll message');
+    }
+
+    if (poll) {
+      const receipt = await sendPoll(poll);
+      await recordOutgoing(message);
+      await cleanup();
+      printReceipt(receipt);
+      console.log('Poll sent successfully');
+      return;
     }
 
     const receipt = link
