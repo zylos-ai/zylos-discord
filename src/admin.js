@@ -14,6 +14,7 @@ const HISTORY_LIMIT_RE = /^(?:[1-9]\d*)$/;
 const DM_POLICIES = new Set(['open', 'allowlist', 'owner']);
 const GROUP_POLICIES = new Set(['disabled', 'allowlist']);
 const CHANNEL_MODES = new Set(['mention', 'smart']);
+const REACTION_NOTIFY_MODES = new Set(['off', 'own', 'all']);
 
 function print(writer, line = '') {
   writer.write(`${line}\n`);
@@ -40,6 +41,7 @@ Commands:
   list-channels
   set-channel-mode <channelId> <mention|smart>
   set-channel-history-limit <channelId> <1..200>
+  set-channel-reaction-notify <channelId> <off|own|all>
   add-channel-allow <channelId> <userId>
   remove-channel-allow <channelId> <userId>
   list-channel-allow <channelId>
@@ -287,6 +289,7 @@ export function runAdmin(argv = [], options = {}) {
           print(ctx.stdout, `  mode: ${channel.mode || 'mention'}`);
           print(ctx.stdout, `  allowFrom: ${allow}`);
           print(ctx.stdout, `  historyLimit: ${channel.historyLimit || config.historyLimit || 5}`);
+          print(ctx.stdout, `  reactionNotifyMode: ${channel.reactionNotifyMode || config.reactionNotifyMode || 'own'}`);
         }
         return 0;
       }
@@ -307,6 +310,15 @@ export function runAdmin(argv = [], options = {}) {
         requireChannel(config, channelId).historyLimit = limit;
         saveOrThrow(config, ctx.saveConfig);
         return success(ctx, `Set channel ${channelId} historyLimit=${limit}`);
+      }
+
+      case 'set-channel-reaction-notify': {
+        const channelId = normalizeSnowflake(args[0], 'channel id');
+        const mode = normalizeEnum(args[1], REACTION_NOTIFY_MODES, 'reactionNotifyMode');
+        const config = ctx.loadConfig();
+        requireChannel(config, channelId).reactionNotifyMode = mode;
+        saveOrThrow(config, ctx.saveConfig);
+        return success(ctx, `Set channel ${channelId} reactionNotifyMode=${mode}`);
       }
 
       case 'add-channel-allow': {

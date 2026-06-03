@@ -50,6 +50,7 @@ describe('config', () => {
       media: { maxBytes: 10 * 1024 * 1024 },
       historyLimit: 5,
       textMode: 'markdown',
+      reactionNotifyMode: 'own',
       internalPort: 3475
     });
   });
@@ -70,7 +71,8 @@ describe('config', () => {
       applicationId: 'app-123',
       features: { downloadMedia: false },
       historyLimit: 5,
-      textMode: 'markdown'
+      textMode: 'markdown',
+      reactionNotifyMode: 'own'
     });
   });
 
@@ -84,6 +86,25 @@ describe('config', () => {
 
     expect(mod.loadConfig()).toMatchObject({
       textMode: 'markdown'
+    });
+  });
+
+  it('normalizes unsupported reactionNotifyMode values to own', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      reactionNotifyMode: 'mentions',
+      channels: {
+        chan1: { reactionNotifyMode: 'mentions' }
+      }
+    }));
+
+    expect(mod.loadConfig()).toMatchObject({
+      reactionNotifyMode: 'own',
+      channels: {
+        chan1: { reactionNotifyMode: 'own' }
+      }
     });
   });
 

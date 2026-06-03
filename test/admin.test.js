@@ -100,6 +100,7 @@ describe('admin CLI', () => {
 
     expect(runAdmin(['set-channel-mode', '1234567890', 'SMART'], harness.options)).toBe(0);
     expect(runAdmin(['set-channel-history-limit', '1234567890', '20'], harness.options)).toBe(0);
+    expect(runAdmin(['set-channel-reaction-notify', '1234567890', 'ALL'], harness.options)).toBe(0);
     expect(runAdmin(['add-channel-allow', '1234567890', '555555'], harness.options)).toBe(0);
     expect(runAdmin(['add-channel-allow', '1234567890', '555555'], harness.options)).toBe(0);
     expect(runAdmin(['remove-channel-allow', '1234567890', '999999'], harness.options)).toBe(0);
@@ -107,6 +108,7 @@ describe('admin CLI', () => {
     expect(harness.config.channels['1234567890']).toMatchObject({
       mode: 'smart',
       historyLimit: 20,
+      reactionNotifyMode: 'all',
       allowFrom: ['555555']
     });
   });
@@ -125,6 +127,7 @@ describe('admin CLI', () => {
     expect(runAdmin(['set-channel-history-limit', '1234567890', '10abc'], harness.options)).toBe(1);
     expect(runAdmin(['set-channel-history-limit', '1234567890', '201'], harness.options)).toBe(1);
     expect(runAdmin(['set-channel-mode', '9999999999', 'smart'], harness.options)).toBe(1);
+    expect(runAdmin(['set-channel-reaction-notify', '1234567890', 'mentions'], harness.options)).toBe(1);
     expect(runAdmin(['unknown'], harness.options)).toBe(1);
 
     expect(harness.saved).toHaveLength(0);
@@ -147,13 +150,15 @@ describe('admin CLI', () => {
           name: 'ops',
           mode: 'mention',
           allowFrom: ['555555'],
-          historyLimit: 9
+          historyLimit: 9,
+          reactionNotifyMode: 'all'
         }
       }
     });
 
     expect(runAdmin(['list-channels'], harness.options)).toBe(0);
     expect(harness.stdout.text).toContain('1234567890 - ops');
+    expect(harness.stdout.text).toContain('reactionNotifyMode: all');
     expect(runAdmin(['list-channel-allow', '1234567890'], harness.options)).toBe(0);
     expect(runAdmin(['remove-channel', '9999999999'], harness.options)).toBe(0);
     expect(runAdmin(['remove-channel', '1234567890'], harness.options)).toBe(0);
@@ -165,6 +170,7 @@ describe('admin CLI', () => {
 
     expect(runAdmin(['help'], harness.options)).toBe(0);
     expect(harness.stdout.text).toContain('set-owner <userId>');
+    expect(harness.stdout.text).toContain('set-channel-reaction-notify');
     expect(harness.stdout.text).toContain('Changes apply live');
   });
 });
