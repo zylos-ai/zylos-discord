@@ -255,6 +255,22 @@ describe('send helpers', () => {
     });
   });
 
+  it('does not escape link marker URLs when textMode is plain', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, textMode: 'plain' });
+      const url = 'https://example.com/a_b#frag';
+      const result = await runSend(['chan1', `[LINK]${url}`], {
+        env: {
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
+        }
+      });
+
+      expect(result.code).toBe(0);
+      expect(requests.find((req) => req.url === '/channels/chan1/messages')?.body.content).toBe(url);
+    });
+  });
+
   it('escapes outbound content when textMode is plain', async () => {
     await withFakeServers(async ({ port, requests }) => {
       const home = makeHome({ port, textMode: 'plain' });

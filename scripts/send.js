@@ -227,8 +227,8 @@ async function uploadDiscordMedia(filePath, { replyToId } = {}) {
   }
 }
 
-async function sendText(text) {
-  const chunks = splitMessage(applyTextMode(text));
+async function sendText(text, { applyMode = true } = {}) {
+  const chunks = splitMessage(applyMode ? applyTextMode(text) : text);
   if (chunks.length === 0) return;
 
   let receipt = null;
@@ -384,7 +384,7 @@ async function main() {
       throw new Error('invalid link message');
     }
 
-    const receipt = link ? await sendText(link.url) : await sendText(message);
+    const receipt = link ? await sendText(link.url, { applyMode: false }) : await sendText(message);
     await recordOutgoing(message);
     await cleanup();
     printReceipt(receipt);
