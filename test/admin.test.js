@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runAdmin } from '../src/admin.js';
-import { resolveGuildAccess } from '../src/lib/auth.js';
+import { isSenderAllowed, resolveGuildAccess } from '../src/lib/auth.js';
 
 function makeHarness(initialConfig, saveResult = true) {
   let config = JSON.parse(JSON.stringify(initialConfig));
@@ -222,6 +222,128 @@ describe('admin CLI', () => {
     });
   });
 
+  it('replaces channel allowFrom with validated deduped entries', () => {
+    const harness = makeHarness({
+      owner: '1111111111',
+      channels: {
+        1234567890: {
+          name: 'ops',
+          mode: 'mention',
+          allowFrom: ['9999999999']
+        }
+      }
+    });
+
+    expect(runAdmin([
+      'set-channel-allowfrom',
+      '1234567890',
+      '1111111111',
+      '2222222222',
+      '1111111111'
+    ], harness.options)).toBe(0);
+    expect(harness.config.channels['1234567890'].allowFrom).toEqual([
+      '1111111111',
+      '2222222222'
+    ]);
+    expect(harness.stdout.text).toContain('allowFrom=1111111111, 2222222222');
+
+    expect(runAdmin(['set-channel-allowfrom', '1234567890', '*'], harness.options)).toBe(0);
+    expect(harness.config.channels['1234567890'].allowFrom).toEqual(['*']);
+
+    expect(runAdmin(['set-channel-allowfrom', '1234567890', '1111111111'], harness.options)).toBe(0);
+    expect(harness.config.channels['1234567890'].allowFrom).toEqual(['1111111111']);
+  });
+
+  it('rejects empty, invalid, and unconfigured set-channel-allowfrom calls', () => {
+    const harness = makeHarness({
+      channels: {
+        1234567890: { name: 'ops', mode: 'mention', allowFrom: ['1111111111'] }
+      }
+    });
+
+    expect(runAdmin(['set-channel-allowfrom', '1234567890'], harness.options)).toBe(1);
+    expect(harness.stderr.text).toContain('allowFrom requires at least one entry');
+    expect(runAdmin(['set-channel-allowfrom', '1234567890', 'not-id'], harness.options)).toBe(1);
+    expect(runAdmin(['set-channel-allowfrom', '9999999999', '1111111111'], harness.options)).toBe(1);
+    expect(harness.stderr.text).toContain('channel not configured; add-channel first');
+    expect(harness.config.channels['1234567890'].allowFrom).toEqual(['1111111111']);
+  });
+
+  it('writes allowFrom semantics that auth reads consistently', () => {
+    const harness = makeHarness({
+      owner: '1111111111',
+      channels: {
+        1234567890: { name: 'ops', mode: 'mention', allowFrom: [] }
+      }
+    });
+
+    expect(runAdmin(['set-channel-allowfrom', '1234567890', '*'], harness.options)).toBe(0);
+    expect(isSenderAllowed(harness.config, '1234567890', '2222222222')).toBe(true);
+
+    expect(runAdmin(['set-channel-allowfrom', '1234567890', '1111111111'], harness.options)).toBe(0);
+    expect(isSenderAllowed(harness.config, '1234567890', '1111111111')).toBe(true);
+    expect(isSenderAllowed(harness.config, '1234567890', '2222222222')).toBe(false);
+  });
+
+  it('treats group command aliases as channel command equivalents', () => {
+    const cases = [
+      {
+        alias: ['add-group', '2222222222', 'ops', 'smart'],
+        canonical: ['add-channel', '2222222222', 'ops', 'smart'],
+        initial: { owner: '1111111111', channels: {} }
+      },
+      {
+        alias: ['set-group-mode', '1234567890', 'smart'],
+        canonical: ['set-channel-mode', '1234567890', 'smart'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention' } } }
+      },
+      {
+        alias: ['set-group-allowfrom', '1234567890', '1111111111', '*'],
+        canonical: ['set-channel-allowfrom', '1234567890', '1111111111', '*'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention', allowFrom: [] } } }
+      },
+      {
+        alias: ['add-group-allow', '1234567890', '2222222222'],
+        canonical: ['add-channel-allow', '1234567890', '2222222222'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention', allowFrom: [] } } }
+      },
+      {
+        alias: ['remove-group-allow', '1234567890', '2222222222'],
+        canonical: ['remove-channel-allow', '1234567890', '2222222222'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention', allowFrom: ['2222222222'] } } }
+      },
+      {
+        alias: ['set-group-history-limit', '1234567890', '12'],
+        canonical: ['set-channel-history-limit', '1234567890', '12'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention' } } }
+      },
+      {
+        alias: ['remove-group', '1234567890'],
+        canonical: ['remove-channel', '1234567890'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention' } } }
+      },
+      {
+        alias: ['list-groups'],
+        canonical: ['list-channels'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention' } } }
+      },
+      {
+        alias: ['list-group-allow', '1234567890'],
+        canonical: ['list-channel-allow', '1234567890'],
+        initial: { channels: { 1234567890: { name: 'ops', mode: 'mention', allowFrom: ['1111111111'] } } }
+      }
+    ];
+
+    for (const item of cases) {
+      const aliasHarness = makeHarness(item.initial);
+      const canonicalHarness = makeHarness(item.initial);
+      expect(runAdmin(item.alias, aliasHarness.options)).toBe(runAdmin(item.canonical, canonicalHarness.options));
+      expect(aliasHarness.config).toEqual(canonicalHarness.config);
+      expect(aliasHarness.stdout.text).toBe(canonicalHarness.stdout.text);
+      expect(aliasHarness.stderr.text).toBe(canonicalHarness.stderr.text);
+    }
+  });
+
   it('rejects invalid input without saving', () => {
     const harness = makeHarness({
       dmPolicy: 'owner',
@@ -238,6 +360,7 @@ describe('admin CLI', () => {
     expect(runAdmin(['set-channel-mode', '9999999999', 'smart'], harness.options)).toBe(1);
     expect(runAdmin(['set-thread-mode', '1234567890', 'bad-id', 'smart'], harness.options)).toBe(1);
     expect(runAdmin(['set-channel-reaction-notify', '1234567890', 'mentions'], harness.options)).toBe(1);
+    expect(runAdmin(['set-channel-allowfrom', '1234567890', 'bad-id'], harness.options)).toBe(1);
     expect(runAdmin(['unknown'], harness.options)).toBe(1);
 
     expect(harness.saved).toHaveLength(0);
@@ -287,6 +410,8 @@ describe('admin CLI', () => {
     expect(harness.stdout.text).toContain('set-dm-policy <open|allowlist|owner|pairing>');
     expect(harness.stdout.text).toContain('dm-pending');
     expect(harness.stdout.text).toContain('dm-approve <userId>');
+    expect(harness.stdout.text).toContain('set-channel-allowfrom');
+    expect(harness.stdout.text).toContain('set-group-allowfrom');
     expect(harness.stdout.text).toContain('set-channel-reaction-notify');
     expect(harness.stdout.text).toContain('set-thread-mode');
     expect(harness.stdout.text).toContain('Changes apply live');

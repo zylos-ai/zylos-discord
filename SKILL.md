@@ -86,7 +86,12 @@ cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint
 - **Server channel defaults:** adding a channel manually with `add-channel` or
   automatically via the owner's first bot mention registers the parent channel
   as `mention` mode with `allowFrom:[ownerId]`. Broaden access explicitly with
-  `add-channel-allow <channelId> <userId>` or `add-channel-allow <channelId> *`.
+  `add-channel-allow <channelId> <userId>` or `add-channel-allow <channelId> *`;
+  replace the whole sender list with
+  `set-channel-allowfrom <channelId> <userId|*...>`.
+- **Group aliases:** Discord stores server access as `channels{}`, but
+  `group-*` admin commands are aliases of the matching `channel-*` commands
+  for cross-channel CLI parity.
 - **Reaction notices:** per-channel `reactionNotifyMode` can be `own` (default),
   `all`, or `off`; use `set-channel-reaction-notify` in the admin CLI.
 - **Voice STT:** inbound Discord voice-note attachments are transcribed inline
