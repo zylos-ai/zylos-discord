@@ -72,6 +72,7 @@ describe('media helpers', () => {
 
     const result = await media.downloadAttachment({
       url: 'https://cdn.example/path/../../hello world.txt',
+      id: 'att123',
       name: '../../hello world.txt',
       size: 5,
       contentType: 'text/plain'
@@ -79,7 +80,7 @@ describe('media helpers', () => {
 
     const mediaDir = path.join(home, 'zylos/components/discord/media');
     expect(result).toMatchObject({
-      filePath: path.join(mediaDir, '12345-hello_world.txt'),
+      filePath: path.join(mediaDir, '12345-att123-hello_world.txt'),
       name: '../../hello world.txt',
       contentType: 'text/plain',
       size: 5
@@ -87,5 +88,35 @@ describe('media helpers', () => {
     expect((fs.statSync(mediaDir).mode & 0o777).toString(8)).toBe('700');
     expect((fs.statSync(result.filePath).mode & 0o777).toString(8)).toBe('600');
     expect(fs.readFileSync(result.filePath, 'utf8')).toBe('hello');
+  });
+
+  it('uses attachment ids to avoid concurrent same-name collisions', async () => {
+    const home = makeHome();
+    const media = await importMedia(home);
+    vi.spyOn(Date, 'now').mockReturnValue(12345);
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response('one', { headers: { 'content-length': '3' } }))
+      .mockResolvedValueOnce(new Response('two', { headers: { 'content-length': '3' } })));
+
+    const [first, second] = await Promise.all([
+      media.downloadAttachment({
+        url: 'https://cdn.example/file.txt',
+        id: 'att1',
+        name: 'same.txt',
+        size: 3
+      }),
+      media.downloadAttachment({
+        url: 'https://cdn.example/file.txt',
+        id: 'att2',
+        name: 'same.txt',
+        size: 3
+      })
+    ]);
+
+    expect(first.filePath).not.toBe(second.filePath);
+    expect(path.basename(first.filePath)).toBe('12345-att1-same.txt');
+    expect(path.basename(second.filePath)).toBe('12345-att2-same.txt');
+    expect(fs.readFileSync(first.filePath, 'utf8')).toBe('one');
+    expect(fs.readFileSync(second.filePath, 'utf8')).toBe('two');
   });
 });

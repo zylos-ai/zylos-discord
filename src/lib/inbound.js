@@ -2,6 +2,117 @@ import { isDmAuthorized, resolveGuildAccess } from './auth.js';
 import { resolvePolicyChannelId, resolvePolicyThreadId } from './guild-access.js';
 import { THINKING_REACTION } from './reactions.js';
 
+export const MAX_MESSAGE_METADATA_KEYS = 1000;
+
+const messageMetadata = new Map();
+
+function messageMetadataKey(channelId, messageId) {
+  const safeChannelId = String(channelId || '');
+  const safeMessageId = String(messageId || '');
+  return safeChannelId && safeMessageId ? `${safeChannelId}:${safeMessageId}` : null;
+}
+
+function evictMessageMetadata(maxKeys = MAX_MESSAGE_METADATA_KEYS) {
+  while (messageMetadata.size > maxKeys) {
+    const oldestKey = messageMetadata.keys().next().value;
+    if (oldestKey === undefined) break;
+    messageMetadata.delete(oldestKey);
+  }
+}
+
+function metadataToMessage(metadata) {
+  const channel = {
+    id: metadata.channelId,
+    name: metadata.channelName,
+    parentId: metadata.parentId,
+    parent: metadata.parentName ? { name: metadata.parentName } : null,
+    isDMBased: () => metadata.dm,
+    isThread: () => metadata.thread
+  };
+
+  return {
+    id: metadata.messageId,
+    content: metadata.content,
+    cleanContent: metadata.cleanContent,
+    author: {
+      id: metadata.userId,
+      username: metadata.username,
+      globalName: metadata.globalName,
+      bot: metadata.bot
+    },
+    channel,
+    inGuild: () => metadata.guild
+  };
+}
+
+export function clearMessageMetadataCache() {
+  messageMetadata.clear();
+}
+
+export function messageMetadataCount() {
+  return messageMetadata.size;
+}
+
+export function rememberMessageMetadata(message, maxKeys = MAX_MESSAGE_METADATA_KEYS) {
+  const channelId = message?.channel?.id;
+  const messageId = message?.id;
+  const userId = message?.author?.id;
+  const key = messageMetadataKey(channelId, messageId);
+  if (!key || !userId) return false;
+
+  const isDm = !!message.channel?.isDMBased?.();
+  const isThread = !!message.channel?.isThread?.();
+  const inGuild = typeof message.inGuild === 'function' ? !!message.inGuild() : !isDm;
+
+  if (messageMetadata.has(key)) messageMetadata.delete(key);
+  messageMetadata.set(key, {
+    channelId: String(channelId),
+    messageId: String(messageId),
+    userId: String(userId),
+    username: message.author?.username || String(userId),
+    globalName: message.author?.globalName || '',
+    bot: !!message.author?.bot,
+    content: String(message.content || ''),
+    cleanContent: message.cleanContent == null ? null : String(message.cleanContent),
+    dm: isDm,
+    guild: inGuild,
+    thread: isThread,
+    parentId: message.channel?.parentId || null,
+    channelName: message.channel?.name || '',
+    parentName: message.channel?.parent?.name || ''
+  });
+  evictMessageMetadata(maxKeys);
+  return true;
+}
+
+export function getCachedMessageMetadata(message) {
+  const key = messageMetadataKey(message?.channel?.id, message?.id);
+  const metadata = key ? messageMetadata.get(key) : null;
+  if (!metadata) return null;
+  messageMetadata.delete(key);
+  messageMetadata.set(key, metadata);
+  return metadataToMessage(metadata);
+}
+
+export async function resolveMessageForDelete(message, { fetchPartial = fetchIfPartial, warn = null } = {}) {
+  const fetchedMessage = await fetchPartial(message);
+  if (fetchedMessage?.channel) {
+    rememberMessageMetadata(fetchedMessage);
+    return fetchedMessage;
+  }
+
+  const cachedMessage = getCachedMessageMetadata(message);
+  if (cachedMessage?.channel) {
+    warn?.(`using cached metadata for deleted message ${message?.id || 'unknown'}`);
+    return cachedMessage;
+  }
+
+  if (message?.partial) {
+    warn?.(`failed to fetch partial deleted message ${message?.id || 'unknown'}`);
+  }
+  return null;
+}
+
 export function messageText(message) {
   return String(message?.cleanContent || message?.content || '');
 }

@@ -246,6 +246,7 @@ describe('config', () => {
     await vi.waitFor(() => {
       expect(seen).toContain(false);
     }, { timeout: 1000 });
+    expect(mod.getConfig().enabled).toBe(false);
     stop();
   });
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { THINKING_REACTION } from '../src/lib/reactions.js';
 import {
   handleUnauthorizedPairingDm,
@@ -6,9 +6,14 @@ import {
 } from '../src/lib/dm-pairing-handler.js';
 import {
   fetchIfPartial,
+  clearMessageMetadataCache,
   getStickers,
+  getCachedMessageMetadata,
+  messageMetadataCount,
+  rememberMessageMetadata,
   resolveReplyContext,
   resolveGuildMessageForwarding,
+  resolveMessageForDelete,
   shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
@@ -75,6 +80,10 @@ function config(overrides = {}) {
 }
 
 describe('inbound helpers', () => {
+  afterEach(() => {
+    clearMessageMetadataCache();
+  });
+
   it('resolves reply context from referenced messages', async () => {
     const fetchReference = vi.fn(async () => guildMessage({
       id: 'parent1',
@@ -106,6 +115,62 @@ describe('inbound helpers', () => {
     await expect(fetchIfPartial({ partial: false, id: 'cached' })).resolves.toMatchObject({ id: 'cached' });
     await expect(fetchIfPartial({ partial: true, fetch: vi.fn(async () => fetched) })).resolves.toBe(fetched);
     await expect(fetchIfPartial({ partial: true, fetch: vi.fn(async () => { throw new Error('gone'); }) })).resolves.toBeNull();
+  });
+
+  it('uses cached message metadata for delete events when partial fetch fails', async () => {
+    const original = guildMessage({
+      id: 'gone1',
+      channelId: 'chan1',
+      authorId: 'user1',
+      content: 'remove me'
+    });
+    expect(rememberMessageMetadata(original)).toBe(true);
+
+    const warn = vi.fn();
+    const resolved = await resolveMessageForDelete({
+      id: 'gone1',
+      partial: true,
+      channel: { id: 'chan1' },
+      fetch: vi.fn(async () => { throw new Error('cache miss'); })
+    }, { warn });
+
+    expect(resolved).toMatchObject({
+      id: 'gone1',
+      content: 'remove me',
+      author: { id: 'user1', username: 'user1' },
+      channel: { id: 'chan1' }
+    });
+    expect(resolved.inGuild()).toBe(true);
+    expect(resolved.channel.isDMBased()).toBe(false);
+    expect(shouldForwardMessageDelete({
+      config: config(),
+      message: resolved,
+      clientUserId: 'bot1'
+    })).toBe(true);
+    expect(warn).toHaveBeenCalledWith('using cached metadata for deleted message gone1');
+  });
+
+  it('bounds message metadata and evicts least-recently-used entries', () => {
+    for (let i = 0; i < 3; i += 1) {
+      rememberMessageMetadata(guildMessage({ id: `m${i}`, content: `message ${i}` }), 2);
+    }
+
+    expect(messageMetadataCount()).toBe(2);
+    expect(getCachedMessageMetadata({ id: 'm0', channel: { id: 'chan1' } })).toBeNull();
+    expect(getCachedMessageMetadata({ id: 'm1', channel: { id: 'chan1' } })).toMatchObject({ id: 'm1' });
+    expect(getCachedMessageMetadata({ id: 'm2', channel: { id: 'chan1' } })).toMatchObject({ id: 'm2' });
+  });
+
+  it('logs and drops partial deletes without fetch or cached metadata', async () => {
+    const warn = vi.fn();
+    await expect(resolveMessageForDelete({
+      id: 'unknown',
+      partial: true,
+      channel: { id: 'chan1' },
+      fetch: vi.fn(async () => { throw new Error('missing'); })
+    }, { warn })).resolves.toBeNull();
+
+    expect(warn).toHaveBeenCalledWith('failed to fetch partial deleted message unknown');
   });
 
   it('keeps media and voice downloads behind the existing response gate', () => {

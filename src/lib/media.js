@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { DATA_DIR } from './config.js';
 
 export const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
@@ -26,6 +27,15 @@ function assertInsideMediaDir(filePath) {
   const resolvedDir = path.resolve(MEDIA_DIR);
   const resolvedFile = path.resolve(filePath);
   return resolvedFile !== resolvedDir && resolvedFile.startsWith(resolvedDir + path.sep);
+}
+
+function safeUniquePart(value) {
+  return String(value || '').replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 64) || crypto.randomUUID();
+}
+
+function uniqueAttachmentFileName(attachment) {
+  const uniquePart = safeUniquePart(attachment?.id || crypto.randomUUID());
+  return `${Date.now()}-${uniquePart}-${safeFileName(attachment?.name)}`;
 }
 
 async function readBodyWithLimit(res, maxBytes) {
@@ -90,7 +100,7 @@ export async function downloadAttachment(attachment, { maxBytes = DEFAULT_MAX_BY
     if (body.skipped) return { ...body, name: attachment.name };
 
     ensureMediaDir();
-    const fileName = `${Date.now()}-${safeFileName(attachment.name)}`;
+    const fileName = uniqueAttachmentFileName(attachment);
     const filePath = path.join(MEDIA_DIR, fileName);
     if (!assertInsideMediaDir(filePath)) {
       return { skipped: true, reason: 'invalid_path', name: attachment.name };
