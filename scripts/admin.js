@@ -7,14 +7,14 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { loadConfig, saveConfig, withStateLock } from './lib/config.js';
+import { loadConfig, saveConfig, withStateLock } from '../src/lib/config.js';
 import {
   approvePairingUser,
   denyPairingUser,
   listPendingPairing,
   loadPairingState,
   savePairingState
-} from './lib/dm-pairing.js';
+} from '../src/lib/dm-pairing.js';
 
 const SNOWFLAKE_RE = /^\d{5,25}$/;
 const HISTORY_LIMIT_RE = /^(?:[1-9]\d*)$/;

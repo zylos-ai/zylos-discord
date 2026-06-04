@@ -27,8 +27,8 @@ zylos-discord/
   src/
     index.js          — Entry point (start/stop lifecycle)
     lib/              — Core logic modules
-    admin.js          — Admin CLI for configuration operations
   scripts/
+    admin.js          — Admin CLI for configuration operations
     send.js           — Outbound message handler (communication components)
   hooks/
     configure.js      — Initial config writer from collected setup values

@@ -66,13 +66,13 @@ Edit `~/zylos/components/discord/config.json`:
 
 ```bash
 # Manage owner, DM policy, server channels, and allowlists
-node ~/zylos/.claude/skills/discord/src/admin.js --help
+node ~/zylos/.claude/skills/discord/scripts/admin.js --help
 
 # Add a server channel in mention mode; it defaults to owner-only access
-node ~/zylos/.claude/skills/discord/src/admin.js add-channel 234567890123456789 general mention
+node ~/zylos/.claude/skills/discord/scripts/admin.js add-channel 234567890123456789 general mention
 
 # Allow all senders for a configured server channel
-node ~/zylos/.claude/skills/discord/src/admin.js set-channel-allowfrom 234567890123456789 '*'
+node ~/zylos/.claude/skills/discord/scripts/admin.js set-channel-allowfrom 234567890123456789 '*'
 
 # Send an outbound C4 reply to Discord; message content is read from stdin
 cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "234567890123456789|msg:345678901234567890"
