@@ -5,6 +5,7 @@ import { DATA_DIR } from './config.js';
 const LOG_DIR = path.join(DATA_DIR, 'logs', 'dm');
 const DEFAULT_HISTORY_LIMIT = 5;
 const MAX_RING_ENTRIES = 100;
+export const MAX_HISTORY_KEYS = 1000;
 
 const replayedKeys = new Set();
 const historyRings = new Map();
@@ -32,9 +33,29 @@ function normalizeEntry(entry = {}) {
   };
 }
 
+function evictHistoryKeys(maxKeys = MAX_HISTORY_KEYS) {
+  while (historyRings.size > maxKeys) {
+    const oldestKey = historyRings.keys().next().value;
+    if (oldestKey === undefined) break;
+    historyRings.delete(oldestKey);
+    replayedKeys.delete(oldestKey);
+  }
+}
+
+function touchHistoryKey(historyKey) {
+  const key = String(historyKey);
+  if (!historyRings.has(key)) return;
+  const ring = historyRings.get(key);
+  historyRings.delete(key);
+  historyRings.set(key, ring);
+}
+
 function setRing(historyKey, entries, limit = MAX_RING_ENTRIES) {
   const normalizedLimit = Math.min(normalizeLimit(limit), MAX_RING_ENTRIES);
-  historyRings.set(String(historyKey), entries.slice(-normalizedLimit));
+  const key = String(historyKey);
+  if (historyRings.has(key)) historyRings.delete(key);
+  historyRings.set(key, entries.slice(-normalizedLimit));
+  evictHistoryKeys();
 }
 
 export function channelHistoryLimit(config, policyChannelId) {
@@ -55,7 +76,10 @@ export function appendToRing(historyKey, entry, limit = MAX_RING_ENTRIES) {
 
 export function ensureReplay(historyKey, limit = DEFAULT_HISTORY_LIMIT) {
   const key = String(historyKey);
-  if (replayedKeys.has(key)) return true;
+  if (replayedKeys.has(key)) {
+    touchHistoryKey(key);
+    return true;
+  }
 
   try {
     const filePath = logPathFor(key);
@@ -90,6 +114,7 @@ export function ensureReplay(historyKey, limit = DEFAULT_HISTORY_LIMIT) {
 
 export function getHistory(historyKey, beforeMessageId, limit = DEFAULT_HISTORY_LIMIT) {
   const key = String(historyKey);
+  touchHistoryKey(key);
   const ring = historyRings.get(key) || [];
   const before = beforeMessageId ? String(beforeMessageId) : null;
   const endIndex = before ? ring.findIndex((entry) => entry.messageId === before) : -1;

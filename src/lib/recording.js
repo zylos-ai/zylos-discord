@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { DATA_DIR, getBotToken } from './config.js';
 import { appendToRing } from './context.js';
-import { clearThinkingReactionsForChannel } from './reactions.js';
+import { clearThinkingReaction, clearThinkingReactionsForChannel } from './reactions.js';
 
 const LOG_DIR = path.join(DATA_DIR, 'logs', 'dm');
 const MAX_BODY_BYTES = 64 * 1024;
@@ -139,7 +139,9 @@ async function handleClearThinking(req, res, internalToken) {
       return;
     }
 
-    const result = await clearThinkingReactionsForChannel(body.channelId);
+    const result = body.messageId
+      ? await clearThinkingReaction(body.channelId, body.messageId)
+      : await clearThinkingReactionsForChannel(body.channelId);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, ...result }));
   } catch (err) {

@@ -16,6 +16,7 @@ import {
   splitMessage,
   validateMediaFile
 } from '../scripts/send.js';
+import { THINKING_REACTION } from '../src/lib/reactions.js';
 
 function runSend(args, { input = null, env = {} } = {}) {
   return new Promise((resolve) => {
@@ -238,6 +239,7 @@ multiselect: yes`)).toEqual({
     try {
       const ok = await clearThinkingReactions({
         channelId: 'chan1',
+        messageId: 'msg1',
         port,
         botToken: 'secret'
       });
@@ -247,7 +249,7 @@ multiselect: yes`)).toEqual({
         method: 'POST',
         url: '/internal/clear-thinking',
         token: crypto.createHash('sha256').update('secret').digest('hex'),
-        body: { channelId: 'chan1' }
+        body: { channelId: 'chan1', messageId: 'msg1' }
       }]);
     } finally {
       await new Promise((resolve) => server.close(resolve));
@@ -258,21 +260,30 @@ multiselect: yes`)).toEqual({
     await withFakeServers(async ({ port, requests }) => {
       const home = makeHome({ port });
       const { stdout } = await runSend([
-        'chan1|req:chan1:msg1',
+        'chan1|msg:msg1|req:chan1:msg1',
         '[SKIP]'
       ], {
         env: {
-          HOME: home
+          HOME: home,
+          DISCORD_API_BASE: `http://127.0.0.1:${port}`
         }
       });
 
       expect(stdout).toContain('Skipped');
-      expect(requests).toEqual([{
-        method: 'POST',
-        url: '/internal/clear-thinking',
-        token: crypto.createHash('sha256').update('secret').digest('hex'),
-        body: { channelId: 'chan1' }
-      }]);
+      expect(requests).toEqual([
+        {
+          method: 'POST',
+          url: '/internal/clear-thinking',
+          token: crypto.createHash('sha256').update('secret').digest('hex'),
+          body: { channelId: 'chan1', messageId: 'msg1' }
+        },
+        {
+          method: 'DELETE',
+          url: `/channels/chan1/messages/msg1/reactions/${encodeURIComponent(THINKING_REACTION)}/@me`,
+          token: undefined,
+          body: null
+        }
+      ]);
     });
   });
 

@@ -141,4 +141,49 @@ describe('recording helpers', () => {
       mod.stopRecordingServer();
     }
   });
+
+  it('clears one pending thinking reaction by message through the internal endpoint', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-record-'));
+    const mod = await importRecording(home);
+    const reactions = await import('../src/lib/reactions.js');
+    const token = 'internal-token';
+    const removed = [];
+    const makeMessage = (id) => ({
+      id,
+      channel: { id: 'chan1' },
+      client: { user: { id: 'bot1' } },
+      react: vi.fn(async () => {}),
+      reactions: {
+        cache: new Map([
+          [reactions.THINKING_REACTION, { users: { remove: vi.fn(async (userId) => removed.push({ id, userId })) } }]
+        ])
+      }
+    });
+
+    await reactions.setReaction(makeMessage('msg1'));
+    await reactions.setReaction(makeMessage('msg2'));
+
+    const server = mod.startRecordingServer({ port: 0, internalToken: token });
+    await new Promise((resolve) => server.once('listening', resolve));
+    const port = server.address().port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/internal/clear-thinking?x=1`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Token': token
+        },
+        body: JSON.stringify({ channelId: 'chan1', messageId: 'msg1' })
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({ ok: true, attempted: 1, cleared: 1 });
+      expect(reactions.pendingThinkingCount('chan1')).toBe(1);
+      expect(removed).toEqual([{ id: 'msg1', userId: 'bot1' }]);
+    } finally {
+      mod.stopRecordingServer();
+    }
+  });
 });

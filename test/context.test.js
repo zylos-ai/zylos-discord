@@ -93,4 +93,29 @@ describe('context history', () => {
     expect(context.channelHistoryLimit({ historyLimit: 5, channels: { c1: { historyLimit: 9 } } }, 'c1')).toBe(9);
     expect(context.channelHistoryLimit({ historyLimit: 7, channels: {} }, 'c1')).toBe(7);
   });
+
+  it('evicts least-recently-used channel history keys when the key cap is exceeded', async () => {
+    const context = await importContext(makeHome());
+
+    for (let i = 0; i < context.MAX_HISTORY_KEYS; i += 1) {
+      context.appendToRing(`chan${i}`, {
+        direction: 'in',
+        username: `u${i}`,
+        text: `message ${i}`,
+        messageId: `m${i}`
+      });
+    }
+    expect(context.getHistory('chan0', null, 5)).toHaveLength(1);
+
+    context.appendToRing('newchan', {
+      direction: 'in',
+      username: 'new',
+      text: 'new message',
+      messageId: 'new'
+    });
+
+    expect(context.getHistory('chan1', null, 5)).toEqual([]);
+    expect(context.getHistory('chan0', null, 5)).toHaveLength(1);
+    expect(context.getHistory('newchan', null, 5)).toHaveLength(1);
+  });
 });

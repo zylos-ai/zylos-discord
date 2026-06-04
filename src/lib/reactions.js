@@ -32,6 +32,37 @@ export function markTypingDone(correlationId) {
   }
 }
 
+function doneFilePath(correlationId) {
+  const safe = safeCorrelationId(correlationId);
+  return safe ? path.join(TYPING_DIR, `${safe}.done`) : null;
+}
+
+function unlinkDoneFile(correlationId) {
+  const filePath = doneFilePath(correlationId);
+  if (!filePath) return false;
+  try {
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function sweepTypingDoneFiles(maxAgeMs = TYPING_TIMEOUT_MS, now = Date.now()) {
+  let removed = 0;
+  try {
+    for (const entry of fs.readdirSync(TYPING_DIR, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.done')) continue;
+      const filePath = path.join(TYPING_DIR, entry.name);
+      const stat = fs.statSync(filePath);
+      if (now - stat.mtimeMs <= maxAgeMs) continue;
+      fs.unlinkSync(filePath);
+      removed += 1;
+    }
+  } catch {}
+  return removed;
+}
+
 function pendingChannelId(message) {
   return String(message?.channel?.id || message?.channelId || '');
 }
@@ -71,6 +102,19 @@ export function pendingThinkingCount(channelId) {
   return pendingThinking.get(String(channelId))?.size || 0;
 }
 
+export async function clearThinkingReaction(channelId, messageId, emoji = THINKING_REACTION) {
+  const safeChannelId = String(channelId || '');
+  const safeMessageId = String(messageId || '');
+  const channelPending = pendingThinking.get(safeChannelId);
+  const message = channelPending?.get(safeMessageId);
+  if (!message) {
+    return { attempted: 0, cleared: 0 };
+  }
+
+  const cleared = await clearReaction(message, emoji);
+  return { attempted: 1, cleared: cleared ? 1 : 0 };
+}
+
 export async function clearThinkingReactionsForChannel(channelId, emoji = THINKING_REACTION) {
   const safeChannelId = String(channelId || '');
   const channelPending = pendingThinking.get(safeChannelId);
@@ -92,8 +136,8 @@ export async function clearThinkingReactionsForChannel(channelId, emoji = THINKI
 }
 
 function doneFileExists(correlationId) {
-  const safe = safeCorrelationId(correlationId);
-  return !!safe && fs.existsSync(path.join(TYPING_DIR, `${safe}.done`));
+  const filePath = doneFilePath(correlationId);
+  return !!filePath && fs.existsSync(filePath);
 }
 
 export async function setReaction(message, emoji = THINKING_REACTION) {
@@ -131,6 +175,7 @@ export function startTyping(channel, correlationId) {
       fs.chmodSync(TYPING_DIR, 0o700);
     } catch {}
   } catch {}
+  sweepTypingDoneFiles();
 
   channel.sendTyping().catch(() => {});
 
@@ -153,6 +198,7 @@ export function startTyping(channel, correlationId) {
 export function stopTyping(correlationId) {
   const safe = safeCorrelationId(correlationId);
   if (!safe) return false;
+  unlinkDoneFile(safe);
 
   const entry = activeTyping.get(safe);
   if (!entry) return false;
@@ -171,3 +217,5 @@ export function stopAllTyping() {
 export function activeTypingCount() {
   return activeTyping.size;
 }
+
+sweepTypingDoneFiles();

@@ -548,6 +548,7 @@ async function clearReaction() {
 
 export async function clearThinkingReactions({
   channelId = endpoint.channelId,
+  messageId = endpoint.msg,
   port = null,
   botToken = null,
   fetchImpl = fetch
@@ -565,7 +566,10 @@ export async function clearThinkingReactions({
         'Content-Type': 'application/json',
         'X-Internal-Token': getInternalToken(resolvedToken)
       },
-      body: JSON.stringify({ channelId }),
+      body: JSON.stringify({
+        channelId,
+        ...(messageId ? { messageId } : {})
+      }),
       signal: controller.signal
     });
     return !!res?.ok;
