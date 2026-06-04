@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildEventEndpoint,
   buildEndpoint,
   escapeXml,
   formatDmMessage,
@@ -7,7 +8,8 @@ import {
   formatMessageDeleteEvent,
   formatMessageEditEvent,
   formatReactionEvent,
-  parseEndpoint
+  parseEndpoint,
+  normalizeCorrelationPart
 } from '../src/lib/c4.js';
 
 describe('c4 helpers', () => {
@@ -27,6 +29,32 @@ describe('c4 helpers', () => {
       msg: null,
       req: null
     });
+  });
+
+  it('builds unique event endpoints while preserving reply threading target', () => {
+    const first = parseEndpoint(buildEventEndpoint('chan1', {
+      messageId: 'msg1',
+      kind: 'reaction:added:💡:user1',
+      now: 12345,
+      nonce: 'nonce1'
+    }));
+    const second = parseEndpoint(buildEventEndpoint('chan1', {
+      messageId: 'msg1',
+      kind: 'reaction:added:💡:user1',
+      now: 12345,
+      nonce: 'nonce2'
+    }));
+
+    expect(first.channelId).toBe('chan1');
+    expect(first.msg).toBe('msg1');
+    expect(first.req).toBe('chan1:msg1:reaction:added:_:user1:12345:nonce1');
+    expect(second.req).toBe('chan1:msg1:reaction:added:_:user1:12345:nonce2');
+    expect(first.req).not.toBe(second.req);
+  });
+
+  it('normalizes correlation parts for endpoint-safe reaction keys', () => {
+    expect(normalizeCorrelationPart('<:ok:123>')).toBe('_:ok:123_');
+    expect(normalizeCorrelationPart('')).toBe('event');
   });
 
   it('escapes XML-sensitive characters', () => {

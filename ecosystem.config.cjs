@@ -12,6 +12,7 @@ module.exports = {
     // Restart on failure
     autorestart: true,
     max_restarts: 10,
+    min_uptime: '10s',
     restart_delay: 5000,
     // Logs managed by PM2
     error_file: path.join(os.homedir(), 'zylos/components/discord/logs/error.log'),

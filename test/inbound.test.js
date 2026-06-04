@@ -110,11 +110,35 @@ describe('inbound helpers', () => {
     })).resolves.toBeNull();
   });
 
+  it('logs reply reference fetch failures when a logger is provided', async () => {
+    const warn = vi.fn();
+
+    await expect(resolveReplyContext({
+      id: 'reply1',
+      reference: { messageId: 'parent1' },
+      fetchReference: vi.fn(async () => { throw new Error('missing'); })
+    }, { warn })).resolves.toBeNull();
+
+    expect(warn).toHaveBeenCalledWith('reply reference fetch failed message=reply1 reference=parent1: missing');
+  });
+
   it('fetches partial entities gracefully', async () => {
     const fetched = { id: 'fetched' };
     await expect(fetchIfPartial({ partial: false, id: 'cached' })).resolves.toMatchObject({ id: 'cached' });
     await expect(fetchIfPartial({ partial: true, fetch: vi.fn(async () => fetched) })).resolves.toBe(fetched);
     await expect(fetchIfPartial({ partial: true, fetch: vi.fn(async () => { throw new Error('gone'); }) })).resolves.toBeNull();
+  });
+
+  it('logs partial fetch failures with event kind and ids when a logger is provided', async () => {
+    const warn = vi.fn();
+
+    await expect(fetchIfPartial({
+      id: 'partial1',
+      partial: true,
+      fetch: vi.fn(async () => { throw new Error('missing'); })
+    }, { kind: 'reaction:added', warn })).resolves.toBeNull();
+
+    expect(warn).toHaveBeenCalledWith('reaction:added partial fetch failed id=partial1: missing');
   });
 
   it('uses cached message metadata for delete events when partial fetch fails', async () => {

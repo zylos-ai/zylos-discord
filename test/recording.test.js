@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -184,6 +185,33 @@ describe('recording helpers', () => {
       expect(removed).toEqual([{ id: 'msg1', userId: 'bot1' }]);
     } finally {
       mod.stopRecordingServer();
+    }
+  });
+
+  it('exits for supervisor restart when the internal port remains occupied', async () => {
+    const blocker = await new Promise((resolve) => {
+      const server = http.createServer();
+      server.listen(0, '127.0.0.1', () => resolve(server));
+    });
+    const port = blocker.address().port;
+    const mod = await importRecording(fs.mkdtempSync(path.join(os.tmpdir(), 'discord-record-')));
+    const onFatal = vi.fn();
+
+    try {
+      mod.startRecordingServer({
+        port,
+        internalToken: 'internal-token',
+        maxRetries: 0,
+        retryDelayMs: 1,
+        onFatal
+      });
+
+      await vi.waitFor(() => {
+        expect(onFatal).toHaveBeenCalledWith(1);
+      }, { timeout: 1000 });
+    } finally {
+      mod.stopRecordingServer();
+      await new Promise((resolve) => blocker.close(resolve));
     }
   });
 });

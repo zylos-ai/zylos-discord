@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const C4_RECEIVE = path.join(process.env.HOME, 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
 const ENDPOINT_KEYS = new Set(['msg', 'req']);
@@ -18,6 +19,22 @@ export function buildEndpoint(channelId, { messageId, correlationId } = {}) {
   if (messageId) endpoint.push(`msg:${messageId}`);
   endpoint.push(`req:${correlationId || `${channelId}:${messageId || ''}`}`);
   return endpoint.join('|');
+}
+
+export function normalizeCorrelationPart(value) {
+  return String(value || '')
+    .replace(/[^A-Za-z0-9_.:-]/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 80) || 'event';
+}
+
+export function buildEventEndpoint(channelId, { messageId, kind, nonce = crypto.randomUUID(), now = Date.now() } = {}) {
+  const normalizedKind = normalizeCorrelationPart(kind);
+  const normalizedNonce = normalizeCorrelationPart(nonce);
+  return buildEndpoint(channelId, {
+    messageId,
+    correlationId: `${channelId}:${messageId || ''}:${normalizedKind}:${now}:${normalizedNonce}`
+  });
 }
 
 export function parseEndpoint(endpoint) {
