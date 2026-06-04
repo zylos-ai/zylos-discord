@@ -37,6 +37,26 @@ describe('reactions helpers', () => {
     expect((fs.statSync(doneFile).mode & 0o777).toString(8)).toBe('600');
   });
 
+  it('removes typing done files when typing stops and sweeps old done files', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-react-'));
+    const mod = await importReactions(home);
+    const channel = { sendTyping: vi.fn(async () => {}) };
+
+    expect(mod.startTyping(channel, 'chan1:msg1')).toBe(true);
+    expect(mod.markTypingDone('chan1:msg1')).toBe(true);
+    const doneFile = path.join(home, 'zylos/components/discord/typing/chan1:msg1.done');
+    expect(fs.existsSync(doneFile)).toBe(true);
+    expect(mod.stopTyping('chan1:msg1')).toBe(true);
+    expect(fs.existsSync(doneFile)).toBe(false);
+
+    fs.mkdirSync(path.dirname(doneFile), { recursive: true });
+    fs.writeFileSync(doneFile, 'old\n');
+    const oldTime = new Date(Date.now() - 240_000);
+    fs.utimesSync(doneFile, oldTime, oldTime);
+    expect(mod.sweepTypingDoneFiles(120_000)).toBe(1);
+    expect(fs.existsSync(doneFile)).toBe(false);
+  });
+
   it('tracks and clears pending thinking reactions by channel', async () => {
     const mod = await importReactions(fs.mkdtempSync(path.join(os.tmpdir(), 'discord-react-')));
     const removed = [];
@@ -68,5 +88,39 @@ describe('reactions helpers', () => {
       { id: 'msg1', userId: 'bot1' },
       { id: 'msg2', userId: 'bot1' }
     ]);
+  });
+
+  it('clears one thinking reaction by message and preserves failed entries', async () => {
+    const mod = await importReactions(fs.mkdtempSync(path.join(os.tmpdir(), 'discord-react-')));
+    const removed = [];
+    const makeMessage = (id, fail = false) => ({
+      id,
+      channel: { id: 'chan1' },
+      client: { user: { id: 'bot1' } },
+      react: vi.fn(async () => {}),
+      reactions: {
+        cache: new Map([
+          [mod.THINKING_REACTION, {
+            users: {
+              remove: vi.fn(async (userId) => {
+                if (fail) throw new Error('remove failed');
+                removed.push({ id, userId });
+              })
+            }
+          }]
+        ])
+      }
+    });
+
+    await mod.setReaction(makeMessage('msg1'));
+    await mod.setReaction(makeMessage('msg2'));
+    await mod.setReaction(makeMessage('msg3', true));
+
+    await expect(mod.clearThinkingReaction('chan1', 'msg1')).resolves.toEqual({ attempted: 1, cleared: 1 });
+    expect(mod.pendingThinkingCount('chan1')).toBe(2);
+    expect(removed).toEqual([{ id: 'msg1', userId: 'bot1' }]);
+
+    await expect(mod.clearThinkingReaction('chan1', 'msg3')).resolves.toEqual({ attempted: 1, cleared: 0 });
+    expect(mod.pendingThinkingCount('chan1')).toBe(2);
   });
 });
