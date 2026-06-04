@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runAdmin } from '../src/admin.js';
+import { runAdmin } from '../scripts/admin.js';
 import { isSenderAllowed, resolveGuildAccess } from '../src/lib/auth.js';
 
 function makeHarness(initialConfig, saveResult = true) {

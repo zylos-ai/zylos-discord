@@ -63,7 +63,7 @@ Zylos agent over the C4 communication bridge.
 
 ```bash
 # Admin CLI -- manage owner, access policies, and per-channel allowlist
-node ~/zylos/.claude/skills/discord/src/admin.js --help
+node ~/zylos/.claude/skills/discord/scripts/admin.js --help
 
 # Outbound (used by C4 to deliver agent replies; message is read from stdin)
 cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint>"
