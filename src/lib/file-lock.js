@@ -15,10 +15,31 @@ function lockPayload() {
   return `${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`;
 }
 
+function readLockPid(lockPath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    const pid = Number(parsed?.pid);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
+}
+
 function lockIsStale(lockPath, staleMs, now = Date.now()) {
   try {
     const stat = fs.statSync(lockPath);
-    return now - stat.mtimeMs > staleMs;
+    if (now - stat.mtimeMs <= staleMs) return false;
+    const pid = readLockPid(lockPath);
+    return !pid || !pidIsAlive(pid);
   } catch {
     return false;
   }
