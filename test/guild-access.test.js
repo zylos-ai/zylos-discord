@@ -89,6 +89,47 @@ describe('guild access helpers', () => {
     expect(resolveGuildAccess(config, '2222222222', '3333333333').ok).toBe(false);
   });
 
+  it('auto-registers against a fresh locked config snapshot', async () => {
+    const staleConfig = {
+      owner: '1111111111',
+      groupPolicy: 'allowlist',
+      channels: {}
+    };
+    const latestConfig = {
+      owner: '1111111111',
+      groupPolicy: 'allowlist',
+      dmPolicy: 'pairing',
+      channels: {}
+    };
+    const updateConfig = vi.fn((mutator) => {
+      const result = mutator(latestConfig);
+      return { ok: true, saved: result !== false, config: latestConfig, result };
+    });
+
+    await expect(autoRegisterOwnerMentionedChannel({
+      config: staleConfig,
+      message: guildMessage(),
+      clientUser: { id: 'bot1' },
+      updateConfig
+    })).resolves.toMatchObject({
+      registered: true,
+      policyChannelId: '2222222222'
+    });
+
+    expect(latestConfig).toMatchObject({
+      dmPolicy: 'pairing',
+      channels: {
+        2222222222: {
+          name: 'ops',
+          mode: 'mention',
+          allowFrom: ['1111111111']
+        }
+      }
+    });
+    expect(staleConfig.channels).toEqual({});
+  });
+
+
   it('does not auto-register twice or for non-owner mentions', async () => {
     const config = {
       owner: '1111111111',

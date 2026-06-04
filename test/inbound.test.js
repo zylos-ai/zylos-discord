@@ -389,6 +389,28 @@ describe('inbound helpers', () => {
     expect(reply).toHaveBeenCalledWith(PAIRING_REQUEST_REPLY);
   });
 
+  it('fails closed on unreadable DM pairing state without saving or notifying', async () => {
+    const notifyOwner = vi.fn(async () => {});
+    const reply = vi.fn(async () => {});
+    const savePairingState = vi.fn(() => true);
+
+    await expect(handleUnauthorizedPairingDm({
+      config: { owner: 'owner1', dmPolicy: 'pairing', dmAllowFrom: [] },
+      userId: '1234567890',
+      name: 'Felix',
+      channelId: 'dmchan',
+      firstMessage: 'hello',
+      loadPairingState: () => { throw new Error('malformed pairing state'); },
+      savePairingState,
+      notifyOwner,
+      reply
+    })).resolves.toMatchObject({ handled: true, error: 'state_load_failed' });
+
+    expect(savePairingState).not.toHaveBeenCalled();
+    expect(notifyOwner).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith('Internal error, please try again.');
+  });
+
   it('silently drops pending or denied DM pairing requests without re-notifying', async () => {
     const notifyOwner = vi.fn(async () => {});
     const reply = vi.fn(async () => {});

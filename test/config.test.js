@@ -205,6 +205,27 @@ describe('config', () => {
     expect(fs.existsSync(`${mod.CONFIG_PATH}.tmp`)).toBe(false);
   });
 
+  it('updates config from a freshly loaded snapshot inside the state lock', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    mod.saveConfig({ enabled: true, owner: 'owner1' });
+
+    const stale = mod.loadConfig();
+    stale.dmPolicy = 'pairing';
+
+    mod.saveConfig({ enabled: true, owner: 'owner2' });
+    const updated = mod.updateConfig((cfg) => {
+      cfg.dmPolicy = stale.dmPolicy;
+      return true;
+    });
+
+    expect(updated).toMatchObject({ ok: true, saved: true });
+    expect(mod.loadConfig()).toMatchObject({
+      owner: 'owner2',
+      dmPolicy: 'pairing'
+    });
+  });
+
   it('reloads after atomic rename and survives a temporarily missing file', async () => {
     const home = makeHome();
     const mod = await importConfig(home);

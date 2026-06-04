@@ -5,6 +5,8 @@ import { isSenderAllowed, resolveGuildAccess } from '../src/lib/auth.js';
 function makeHarness(initialConfig, saveResult = true) {
   let config = JSON.parse(JSON.stringify(initialConfig));
   let pairingState = { pending: {}, denied: {} };
+  let saveConfigResult = saveResult;
+  let savePairingResult = saveResult;
   const saved = [];
   const savedPairing = [];
   const stdout = { text: '', write(chunk) { this.text += chunk; } };
@@ -14,23 +16,26 @@ function makeHarness(initialConfig, saveResult = true) {
     stderr,
     loadConfig: () => config,
     saveConfig: (nextConfig) => {
-      if (!saveResult) return false;
+      if (!saveConfigResult) return false;
       saved.push(JSON.parse(JSON.stringify(nextConfig)));
       config = nextConfig;
       return true;
     },
     loadPairingState: () => pairingState,
     savePairingState: (nextState) => {
-      if (!saveResult) return false;
+      if (!savePairingResult) return false;
       savedPairing.push(JSON.parse(JSON.stringify(nextState)));
       pairingState = nextState;
       return true;
-    }
+    },
+    withStateLock: (fn) => fn()
   };
   return {
     get config() { return config; },
     get pairingState() { return pairingState; },
     set pairingState(nextState) { pairingState = nextState; },
+    set saveConfigResult(value) { saveConfigResult = value; },
+    set savePairingResult(value) { savePairingResult = value; },
     saved,
     savedPairing,
     stdout,
@@ -134,6 +139,28 @@ describe('admin CLI', () => {
       reason: 'spam risk'
     });
     expect(harness.savedPairing).toHaveLength(2);
+  });
+
+  it('rolls back config when DM pairing state save fails', () => {
+    const harness = makeHarness({
+      dmPolicy: 'pairing',
+      dmAllowFrom: ['1111111111']
+    });
+    harness.pairingState = {
+      pending: {
+        1234567890: { userId: '1234567890', name: 'Felix' }
+      },
+      denied: {}
+    };
+    harness.savePairingResult = false;
+
+    expect(runAdmin(['dm-approve', '1234567890'], harness.options)).toBe(1);
+    expect(harness.stderr.text).toContain('failed to save pairing state');
+    expect(harness.config.dmAllowFrom).toEqual(['1111111111']);
+    expect(harness.pairingState.pending['1234567890']).toBeDefined();
+    expect(harness.saved.at(-1)).toMatchObject({
+      dmAllowFrom: ['1111111111']
+    });
   });
 
   it('adds channels without clobbering existing configuration', () => {

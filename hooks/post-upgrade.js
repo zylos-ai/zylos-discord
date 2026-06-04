@@ -19,6 +19,13 @@ const HOME = process.env.HOME;
 const DATA_DIR = path.join(HOME, 'zylos/components/discord');
 const configPath = path.join(DATA_DIR, 'config.json');
 
+function writeJsonFileAtomic(filePath, value) {
+  const tmpPath = `${filePath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(tmpPath, filePath);
+  fs.chmodSync(filePath, 0o600);
+}
+
 console.log('[post-upgrade] Running discord-specific migrations...\n');
 
 // Config migrations
@@ -45,8 +52,7 @@ if (fs.existsSync(configPath)) {
 
     // Save if migrated
     if (migrated) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
-      fs.chmodSync(configPath, 0o600);
+      writeJsonFileAtomic(configPath, config);
       console.log('Config migrations applied:');
       migrations.forEach(m => console.log('  - ' + m));
     } else {

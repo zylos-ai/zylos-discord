@@ -8,7 +8,9 @@ import {
   getPairingStatus,
   loadPairingState,
   markPairingPending,
-  savePairingState
+  PairingStateLoadError,
+  savePairingState,
+  updatePairingState
 } from '../src/lib/dm-pairing.js';
 
 function tempFile() {
@@ -16,12 +18,13 @@ function tempFile() {
 }
 
 describe('dm pairing state', () => {
-  it('loads missing or malformed state as empty', () => {
+  it('loads missing state as empty but fails closed on malformed state', () => {
     expect(loadPairingState(tempFile())).toEqual({ pending: {}, denied: {} });
 
     const file = tempFile();
     fs.writeFileSync(file, '{bad json');
-    expect(loadPairingState(file)).toEqual({ pending: {}, denied: {} });
+    expect(() => loadPairingState(file)).toThrow(PairingStateLoadError);
+    expect(fs.readFileSync(file, 'utf8')).toBe('{bad json');
   });
 
   it('saves pairing state atomically with owner-only permissions', () => {
@@ -43,6 +46,18 @@ describe('dm pairing state', () => {
     expect(loadPairingState(file)).toEqual(state);
     expect(fs.existsSync(`${file}.tmp`)).toBe(false);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('aborts locked mutations when pairing state is malformed without overwriting it', () => {
+    const file = tempFile();
+    fs.writeFileSync(file, '{bad json');
+
+    expect(() => updatePairingState((state) => {
+      state.pending['1234567890'] = { userId: '1234567890' };
+      return true;
+    }, file)).toThrow(PairingStateLoadError);
+
+    expect(fs.readFileSync(file, 'utf8')).toBe('{bad json');
   });
 
   it('marks pending once, truncates first message, and does not requeue denied users', () => {

@@ -7,7 +7,7 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { loadConfig, saveConfig } from './lib/config.js';
+import { loadConfig, saveConfig, withStateLock } from './lib/config.js';
 import {
   approvePairingUser,
   denyPairingUser,
@@ -213,7 +213,8 @@ function makeContext(options = {}) {
     loadConfig: options.loadConfig || loadConfig,
     saveConfig: options.saveConfig || saveConfig,
     loadPairingState: options.loadPairingState || loadPairingState,
-    savePairingState: options.savePairingState || savePairingState
+    savePairingState: options.savePairingState || savePairingState,
+    withStateLock: options.withStateLock || withStateLock
   };
 }
 
@@ -227,6 +228,7 @@ export function runAdmin(argv = [], options = {}) {
   const [rawCommand = 'help', ...args] = argv;
   const command = COMMAND_ALIASES[rawCommand] || rawCommand;
 
+  return ctx.withStateLock(() => {
   try {
     switch (command) {
       case 'help':
@@ -314,9 +316,18 @@ export function runAdmin(argv = [], options = {}) {
         const userId = normalizeSnowflake(args[0], 'user id');
         const config = ctx.loadConfig();
         const state = ctx.loadPairingState();
+        const configSnapshot = cloneConfig(config);
+        const stateSnapshot = cloneConfig(state);
         approvePairingUser(config, userId, state);
-        saveOrThrow(config, ctx.saveConfig);
+        if (!ctx.saveConfig(config)) {
+          Object.assign(config, configSnapshot);
+          throw new Error('failed to save config');
+        }
         if (!ctx.savePairingState(state)) {
+          Object.assign(state, stateSnapshot);
+          if (!ctx.saveConfig(configSnapshot)) {
+            throw new Error('failed to save pairing state; config rollback failed');
+          }
           throw new Error('failed to save pairing state');
         }
         return success(ctx, `Approved DM pairing request for ${userId}`);
@@ -327,9 +338,18 @@ export function runAdmin(argv = [], options = {}) {
         const reason = args.slice(1).join(' ');
         const config = ctx.loadConfig();
         const state = ctx.loadPairingState();
+        const configSnapshot = cloneConfig(config);
+        const stateSnapshot = cloneConfig(state);
         denyPairingUser(config, userId, reason, state);
-        saveOrThrow(config, ctx.saveConfig);
+        if (!ctx.saveConfig(config)) {
+          Object.assign(config, configSnapshot);
+          throw new Error('failed to save config');
+        }
         if (!ctx.savePairingState(state)) {
+          Object.assign(state, stateSnapshot);
+          if (!ctx.saveConfig(configSnapshot)) {
+            throw new Error('failed to save pairing state; config rollback failed');
+          }
           throw new Error('failed to save pairing state');
         }
         return success(ctx, `Denied DM pairing request for ${userId}`);
@@ -496,6 +516,7 @@ export function runAdmin(argv = [], options = {}) {
     print(ctx.stderr, `Error: ${err.message}`);
     return 1;
   }
+  });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -8,10 +8,19 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, withStateLock } from './config.js';
 
 export const PAIRING_STATE_FILE = path.join(DATA_DIR, 'dm-pairing.json');
 const FIRST_MESSAGE_LIMIT = 500;
+
+export class PairingStateLoadError extends Error {
+  constructor(message, { filePath, cause } = {}) {
+    super(message);
+    this.name = 'PairingStateLoadError';
+    this.filePath = filePath;
+    this.cause = cause;
+  }
+}
 
 function normalizeUserId(userId) {
   return String(userId || '').trim();
@@ -35,11 +44,22 @@ function normalizeState(parsed = {}) {
 export function loadPairingState(filePath = PAIRING_STATE_FILE) {
   try {
     return normalizeState(JSON.parse(fs.readFileSync(filePath, 'utf8')));
-  } catch {}
-  return { pending: {}, denied: {} };
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      return { pending: {}, denied: {} };
+    }
+    throw new PairingStateLoadError(`failed to load pairing state: ${err.message}`, {
+      filePath,
+      cause: err
+    });
+  }
 }
 
 export function savePairingState(state, filePath = PAIRING_STATE_FILE) {
+  return withStateLock(() => writePairingStateFile(state, filePath));
+}
+
+function writePairingStateFile(state, filePath = PAIRING_STATE_FILE) {
   const payload = normalizeState(state);
   const tmpPath = filePath + '.tmp';
   try {
@@ -57,6 +77,20 @@ export function savePairingState(state, filePath = PAIRING_STATE_FILE) {
     } catch {}
     return false;
   }
+}
+
+export function updatePairingState(mutator, filePath = PAIRING_STATE_FILE) {
+  return withStateLock(() => {
+    const state = loadPairingState(filePath);
+    const result = mutator(state);
+    if (result === false) {
+      return { ok: true, saved: false, state, result };
+    }
+    if (!writePairingStateFile(state, filePath)) {
+      return { ok: false, saved: false, state, result };
+    }
+    return { ok: true, saved: true, state, result };
+  });
 }
 
 export function listPendingPairing(state = loadPairingState()) {
