@@ -75,6 +75,11 @@ cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint
 ## Access Control
 
 - **Owner:** the first user to DM the bot becomes the owner (admin).
+- **DM access:** `dmPolicy` can be `open`, `allowlist`, `owner`, or
+  `pairing`. Under `pairing`, unknown DM senders are queued for owner review;
+  the agent never auto-approves access.
+- **DM pairing commands:** use `dm-pending`, `dm-approve <userId>`, and
+  `dm-deny <userId> [reason]` in the admin CLI to review queued DM requests.
 - **Guild access:** the owner may use server channels even when `groupPolicy`
   is `disabled`; non-owner server access still follows configured channel and
   sender policy.

@@ -14,6 +14,8 @@ export const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const ENV_PATH = path.join(HOME, 'zylos/.env');
 
 // Default configuration
+const DM_POLICIES = new Set(['open', 'allowlist', 'owner', 'pairing']);
+
 export const DEFAULT_CONFIG = {
   enabled: true,
   botToken: null,
@@ -99,6 +101,11 @@ export function mergeConfigWithDefaults(parsed = {}) {
   }
   if (normalized.textMode && !['plain', 'markdown'].includes(normalized.textMode)) {
     normalized.textMode = DEFAULT_CONFIG.textMode;
+  }
+  if (normalized.dmPolicy && !DM_POLICIES.has(String(normalized.dmPolicy).trim().toLowerCase())) {
+    normalized.dmPolicy = DEFAULT_CONFIG.dmPolicy;
+  } else if (normalized.dmPolicy) {
+    normalized.dmPolicy = String(normalized.dmPolicy).trim().toLowerCase();
   }
   if (normalized.reactionNotifyMode && !['off', 'own', 'all'].includes(normalized.reactionNotifyMode)) {
     normalized.reactionNotifyMode = DEFAULT_CONFIG.reactionNotifyMode;

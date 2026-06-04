@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { THINKING_REACTION } from '../src/lib/reactions.js';
 import {
+  handleUnauthorizedPairingDm,
+  PAIRING_REQUEST_REPLY
+} from '../src/lib/dm-pairing-handler.js';
+import {
   fetchIfPartial,
   getStickers,
   resolveReplyContext,
@@ -356,5 +360,86 @@ describe('inbound helpers', () => {
       message: guildMessage({ content: 'gone' }),
       clientUserId: 'bot1'
     })).toBe(false);
+  });
+
+  it('queues a new unknown DM pairing request and notifies once', async () => {
+    const state = { pending: {}, denied: {} };
+    const notifyOwner = vi.fn(async () => {});
+    const reply = vi.fn(async () => {});
+
+    await expect(handleUnauthorizedPairingDm({
+      config: { owner: 'owner1', dmPolicy: 'pairing', dmAllowFrom: [] },
+      userId: '1234567890',
+      name: 'Felix',
+      channelId: 'dmchan',
+      firstMessage: 'hello',
+      loadPairingState: () => state,
+      savePairingState: vi.fn(() => true),
+      notifyOwner,
+      reply
+    })).resolves.toMatchObject({ handled: true, queued: true });
+
+    expect(state.pending['1234567890']).toMatchObject({
+      userId: '1234567890',
+      name: 'Felix',
+      channelId: 'dmchan',
+      firstMessage: 'hello'
+    });
+    expect(notifyOwner).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledWith(PAIRING_REQUEST_REPLY);
+  });
+
+  it('silently drops pending or denied DM pairing requests without re-notifying', async () => {
+    const notifyOwner = vi.fn(async () => {});
+    const reply = vi.fn(async () => {});
+    const savePairingState = vi.fn(() => true);
+
+    await expect(handleUnauthorizedPairingDm({
+      config: { owner: 'owner1', dmPolicy: 'pairing', dmAllowFrom: [] },
+      userId: '1234567890',
+      name: 'Felix',
+      channelId: 'dmchan',
+      firstMessage: 'again',
+      loadPairingState: () => ({
+        pending: { 1234567890: { userId: '1234567890' } },
+        denied: {}
+      }),
+      savePairingState,
+      notifyOwner,
+      reply
+    })).resolves.toMatchObject({ handled: true, silent: true, status: 'pending' });
+
+    await expect(handleUnauthorizedPairingDm({
+      config: { owner: 'owner1', dmPolicy: 'pairing', dmAllowFrom: [] },
+      userId: '2222222222',
+      name: 'Blocked',
+      channelId: 'dmchan',
+      firstMessage: 'again',
+      loadPairingState: () => ({
+        pending: {},
+        denied: { 2222222222: { userId: '2222222222' } }
+      }),
+      savePairingState,
+      notifyOwner,
+      reply
+    })).resolves.toMatchObject({ handled: true, silent: true, status: 'denied' });
+
+    expect(savePairingState).not.toHaveBeenCalled();
+    expect(notifyOwner).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  it('lets approved pairing users fall back to the normal DM path', async () => {
+    await expect(handleUnauthorizedPairingDm({
+      config: { owner: 'owner1', dmPolicy: 'pairing', dmAllowFrom: ['1234567890'] },
+      userId: '1234567890',
+      name: 'Felix',
+      channelId: 'dmchan',
+      firstMessage: 'hello',
+      loadPairingState: () => ({ pending: {}, denied: {} }),
+      savePairingState: vi.fn(() => true),
+      notifyOwner: vi.fn(async () => {}),
+      reply: vi.fn(async () => {})
+    })).resolves.toMatchObject({ handled: false, status: 'approved' });
   });
 });

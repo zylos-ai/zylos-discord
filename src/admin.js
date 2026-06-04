@@ -8,10 +8,17 @@
 
 import { fileURLToPath } from 'node:url';
 import { loadConfig, saveConfig } from './lib/config.js';
+import {
+  approvePairingUser,
+  denyPairingUser,
+  listPendingPairing,
+  loadPairingState,
+  savePairingState
+} from './lib/dm-pairing.js';
 
 const SNOWFLAKE_RE = /^\d{5,25}$/;
 const HISTORY_LIMIT_RE = /^(?:[1-9]\d*)$/;
-const DM_POLICIES = new Set(['open', 'allowlist', 'owner']);
+const DM_POLICIES = new Set(['open', 'allowlist', 'owner', 'pairing']);
 const GROUP_POLICIES = new Set(['disabled', 'allowlist', 'open']);
 const CHANNEL_MODES = new Set(['mention', 'smart']);
 const REACTION_NOTIFY_MODES = new Set(['off', 'own', 'all']);
@@ -30,10 +37,13 @@ Commands:
   show-owner
   set-owner <userId>
 
-  set-dm-policy <open|allowlist|owner>
+  set-dm-policy <open|allowlist|owner|pairing>
   add-dm-allow <userId>
   remove-dm-allow <userId>
   list-dm-allow
+  dm-pending
+  dm-approve <userId>
+  dm-deny <userId> [reason]
 
   set-group-policy <disabled|allowlist|open>
   add-channel <channelId> <name> [mention|smart]  (defaults owner-only)
@@ -174,7 +184,9 @@ function makeContext(options = {}) {
     stdout: options.stdout || process.stdout,
     stderr: options.stderr || process.stderr,
     loadConfig: options.loadConfig || loadConfig,
-    saveConfig: options.saveConfig || saveConfig
+    saveConfig: options.saveConfig || saveConfig,
+    loadPairingState: options.loadPairingState || loadPairingState,
+    savePairingState: options.savePairingState || savePairingState
   };
 }
 
@@ -253,6 +265,46 @@ export function runAdmin(argv = [], options = {}) {
         print(ctx.stdout, `DM policy: ${config.dmPolicy || 'owner'}`);
         print(ctx.stdout, `DM allowFrom (${allow.length}): ${allow.length ? allow.join(', ') : 'none'}`);
         return 0;
+      }
+
+      case 'dm-pending': {
+        const state = ctx.loadPairingState();
+        const pending = listPendingPairing(state);
+        if (pending.length === 0) {
+          print(ctx.stdout, 'No pending DM pairing requests');
+          return 0;
+        }
+        for (const entry of pending) {
+          print(ctx.stdout, `${entry.userId} - ${entry.name || 'unknown'}`);
+          print(ctx.stdout, `  requestedAt: ${entry.requestedAt || 'unknown'}`);
+          print(ctx.stdout, `  firstMessage: ${entry.firstMessage || ''}`);
+        }
+        return 0;
+      }
+
+      case 'dm-approve': {
+        const userId = normalizeSnowflake(args[0], 'user id');
+        const config = ctx.loadConfig();
+        const state = ctx.loadPairingState();
+        approvePairingUser(config, userId, state);
+        saveOrThrow(config, ctx.saveConfig);
+        if (!ctx.savePairingState(state)) {
+          throw new Error('failed to save pairing state');
+        }
+        return success(ctx, `Approved DM pairing request for ${userId}`);
+      }
+
+      case 'dm-deny': {
+        const userId = normalizeSnowflake(args[0], 'user id');
+        const reason = args.slice(1).join(' ');
+        const config = ctx.loadConfig();
+        const state = ctx.loadPairingState();
+        denyPairingUser(config, userId, reason, state);
+        saveOrThrow(config, ctx.saveConfig);
+        if (!ctx.savePairingState(state)) {
+          throw new Error('failed to save pairing state');
+        }
+        return success(ctx, `Denied DM pairing request for ${userId}`);
       }
 
       case 'set-group-policy': {
