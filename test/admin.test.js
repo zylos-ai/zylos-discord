@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runAdmin } from '../src/admin.js';
+import { resolveGuildAccess } from '../src/lib/auth.js';
 
 function makeHarness(initialConfig, saveResult = true) {
   let config = JSON.parse(JSON.stringify(initialConfig));
@@ -42,12 +43,13 @@ describe('admin CLI', () => {
 
     expect(runAdmin(['set-owner', '1234567890'], harness.options)).toBe(0);
     expect(runAdmin(['set-dm-policy', 'ALLOWLIST'], harness.options)).toBe(0);
+    expect(runAdmin(['set-group-policy', 'OPEN'], harness.options)).toBe(0);
     expect(runAdmin(['set-group-policy', 'DISABLED'], harness.options)).toBe(0);
 
     expect(harness.config.owner).toBe('1234567890');
     expect(harness.config.dmPolicy).toBe('allowlist');
     expect(harness.config.groupPolicy).toBe('disabled');
-    expect(harness.saved).toHaveLength(3);
+    expect(harness.saved).toHaveLength(4);
   });
 
   it('manages DM allowlist with string-normalized dedupe and graceful remove', () => {
@@ -83,12 +85,43 @@ describe('admin CLI', () => {
       historyLimit: 12
     });
 
+    harness.config.owner = '9999999999';
     expect(runAdmin(['add-channel', '2222222222', 'ops channel'], harness.options)).toBe(0);
     expect(harness.config.channels['2222222222']).toEqual({
       name: 'ops channel',
       mode: 'mention',
-      allowFrom: []
+      allowFrom: ['9999999999']
     });
+  });
+
+  it('defaults added channels to owner-only and allows explicit broadening', () => {
+    const harness = makeHarness({
+      owner: '1111111111',
+      groupPolicy: 'allowlist',
+      channels: {}
+    });
+
+    expect(runAdmin(['add-channel', '2222222222', 'ops channel'], harness.options)).toBe(0);
+    expect(harness.config.channels['2222222222'].allowFrom).toEqual(['1111111111']);
+    expect(resolveGuildAccess(harness.config, '2222222222', '1111111111').ok).toBe(true);
+    expect(resolveGuildAccess(harness.config, '2222222222', '3333333333').ok).toBe(false);
+
+    expect(runAdmin(['add-channel-allow', '2222222222', '3333333333'], harness.options)).toBe(0);
+    expect(resolveGuildAccess(harness.config, '2222222222', '3333333333').ok).toBe(true);
+
+    expect(runAdmin(['add-channel-allow', '2222222222', '*'], harness.options)).toBe(0);
+    expect(resolveGuildAccess(harness.config, '2222222222', '4444444444').ok).toBe(true);
+  });
+
+  it('falls back to allow-all when adding a channel before owner binding', () => {
+    const harness = makeHarness({
+      owner: null,
+      channels: {}
+    });
+
+    expect(runAdmin(['add-channel', '2222222222', 'ops channel'], harness.options)).toBe(0);
+    expect(harness.config.channels['2222222222'].allowFrom).toEqual([]);
+    expect(harness.stderr.text).toContain('Owner not configured');
   });
 
   it('manages per-channel settings and allowlists', () => {
@@ -99,6 +132,7 @@ describe('admin CLI', () => {
     });
 
     expect(runAdmin(['set-channel-mode', '1234567890', 'SMART'], harness.options)).toBe(0);
+    expect(runAdmin(['set-thread-mode', '1234567890', '9876543210', 'MENTION'], harness.options)).toBe(0);
     expect(runAdmin(['set-channel-history-limit', '1234567890', '20'], harness.options)).toBe(0);
     expect(runAdmin(['set-channel-reaction-notify', '1234567890', 'ALL'], harness.options)).toBe(0);
     expect(runAdmin(['add-channel-allow', '1234567890', '555555'], harness.options)).toBe(0);
@@ -107,6 +141,9 @@ describe('admin CLI', () => {
 
     expect(harness.config.channels['1234567890']).toMatchObject({
       mode: 'smart',
+      threads: {
+        9876543210: { mode: 'mention' }
+      },
       historyLimit: 20,
       reactionNotifyMode: 'all',
       allowFrom: ['555555']
@@ -127,6 +164,7 @@ describe('admin CLI', () => {
     expect(runAdmin(['set-channel-history-limit', '1234567890', '10abc'], harness.options)).toBe(1);
     expect(runAdmin(['set-channel-history-limit', '1234567890', '201'], harness.options)).toBe(1);
     expect(runAdmin(['set-channel-mode', '9999999999', 'smart'], harness.options)).toBe(1);
+    expect(runAdmin(['set-thread-mode', '1234567890', 'bad-id', 'smart'], harness.options)).toBe(1);
     expect(runAdmin(['set-channel-reaction-notify', '1234567890', 'mentions'], harness.options)).toBe(1);
     expect(runAdmin(['unknown'], harness.options)).toBe(1);
 
@@ -150,6 +188,9 @@ describe('admin CLI', () => {
           name: 'ops',
           mode: 'mention',
           allowFrom: ['555555'],
+          threads: {
+            9876543210: { mode: 'smart' }
+          },
           historyLimit: 9,
           reactionNotifyMode: 'all'
         }
@@ -158,6 +199,7 @@ describe('admin CLI', () => {
 
     expect(runAdmin(['list-channels'], harness.options)).toBe(0);
     expect(harness.stdout.text).toContain('1234567890 - ops');
+    expect(harness.stdout.text).toContain('thread 9876543210: mode=smart');
     expect(harness.stdout.text).toContain('reactionNotifyMode: all');
     expect(runAdmin(['list-channel-allow', '1234567890'], harness.options)).toBe(0);
     expect(runAdmin(['remove-channel', '9999999999'], harness.options)).toBe(0);
@@ -171,6 +213,7 @@ describe('admin CLI', () => {
     expect(runAdmin(['help'], harness.options)).toBe(0);
     expect(harness.stdout.text).toContain('set-owner <userId>');
     expect(harness.stdout.text).toContain('set-channel-reaction-notify');
+    expect(harness.stdout.text).toContain('set-thread-mode');
     expect(harness.stdout.text).toContain('Changes apply live');
   });
 });

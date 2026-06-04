@@ -28,25 +28,27 @@ export function isDmAuthorized(config, userId) {
 
 export function isChannelAllowed(config, policyChannelId) {
   if (config.groupPolicy === 'disabled') return false;
+  if (config.groupPolicy === 'open') return true;
   return Object.prototype.hasOwnProperty.call(config.channels || {}, String(policyChannelId));
 }
 
-export function isSmartChannel(config, policyChannelId) {
+export function isSmartChannel(config, policyChannelId, threadId = null) {
   if (config.groupPolicy === 'disabled') return false;
   const channel = (config.channels || {})[String(policyChannelId)];
-  return channel?.mode === 'smart';
+  const thread = threadId ? channel?.threads?.[String(threadId)] : null;
+  return (thread?.mode || channel?.mode) === 'smart';
 }
 
 export function isSenderAllowed(config, policyChannelId, userId) {
   const channel = (config.channels || {})[String(policyChannelId)];
   const allowFrom = (channel?.allowFrom || []).map(String);
-  return allowFrom.length === 0 || allowFrom.includes(String(userId));
+  return allowFrom.length === 0 || allowFrom.includes('*') || allowFrom.includes(String(userId));
 }
 
-export function resolveGuildAccess(config, policyChannelId, userId) {
+export function resolveGuildAccess(config, policyChannelId, userId, threadId = null) {
   const owner = isOwner(config, userId);
   const allowed = isChannelAllowed(config, policyChannelId);
-  const smart = isSmartChannel(config, policyChannelId);
+  const smart = isSmartChannel(config, policyChannelId, threadId);
 
   if (!owner && !allowed && !smart) {
     return { ok: false, owner, allowed, smart };
