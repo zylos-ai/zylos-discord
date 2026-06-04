@@ -22,6 +22,17 @@ const DM_POLICIES = new Set(['open', 'allowlist', 'owner', 'pairing']);
 const GROUP_POLICIES = new Set(['disabled', 'allowlist', 'open']);
 const CHANNEL_MODES = new Set(['mention', 'smart']);
 const REACTION_NOTIFY_MODES = new Set(['off', 'own', 'all']);
+const COMMAND_ALIASES = {
+  'add-group': 'add-channel',
+  'remove-group': 'remove-channel',
+  'list-groups': 'list-channels',
+  'set-group-mode': 'set-channel-mode',
+  'set-group-allowfrom': 'set-channel-allowfrom',
+  'set-group-history-limit': 'set-channel-history-limit',
+  'add-group-allow': 'add-channel-allow',
+  'remove-group-allow': 'remove-channel-allow',
+  'list-group-allow': 'list-channel-allow'
+};
 
 function print(writer, line = '') {
   writer.write(`${line}\n`);
@@ -53,9 +64,14 @@ Commands:
   set-thread-mode <parentChannelId> <threadId> <mention|smart>
   set-channel-history-limit <channelId> <1..200>
   set-channel-reaction-notify <channelId> <off|own|all>
+  set-channel-allowfrom <channelId> <userId|*...>
   add-channel-allow <channelId> <userId|*>
   remove-channel-allow <channelId> <userId|*>
   list-channel-allow <channelId>
+
+  Group aliases: add-group, remove-group, list-groups, set-group-mode,
+    set-group-allowfrom, set-group-history-limit, add-group-allow,
+    remove-group-allow, list-group-allow
 
   help`;
 }
@@ -165,6 +181,17 @@ function addUnique(list, value) {
   return true;
 }
 
+function normalizeChannelAllowEntries(values) {
+  if (!values.length) {
+    throw new Error('allowFrom requires at least one entry');
+  }
+  const entries = [];
+  for (const value of values) {
+    addUnique(entries, normalizeChannelAllowEntry(value));
+  }
+  return entries;
+}
+
 function removeValue(list, value) {
   const normalized = String(value);
   const before = list.length;
@@ -197,7 +224,8 @@ function success(ctx, message) {
 
 export function runAdmin(argv = [], options = {}) {
   const ctx = makeContext(options);
-  const [command = 'help', ...args] = argv;
+  const [rawCommand = 'help', ...args] = argv;
+  const command = COMMAND_ALIASES[rawCommand] || rawCommand;
 
   try {
     switch (command) {
@@ -413,6 +441,16 @@ export function runAdmin(argv = [], options = {}) {
         return success(ctx, `Set channel ${channelId} reactionNotifyMode=${mode}`);
       }
 
+      case 'set-channel-allowfrom': {
+        const channelId = normalizeSnowflake(args[0], 'channel id');
+        const allowFrom = normalizeChannelAllowEntries(args.slice(1));
+        const config = ctx.loadConfig();
+        const channel = requireChannel(config, channelId);
+        channel.allowFrom = allowFrom;
+        saveOrThrow(config, ctx.saveConfig);
+        return success(ctx, `Set channel ${channelId} allowFrom=${allowFrom.join(', ')}`);
+      }
+
       case 'add-channel-allow': {
         const channelId = normalizeSnowflake(args[0], 'channel id');
         const userId = normalizeChannelAllowEntry(args[1]);
@@ -450,7 +488,7 @@ export function runAdmin(argv = [], options = {}) {
       }
 
       default:
-        print(ctx.stderr, `Unknown command: ${command}`);
+        print(ctx.stderr, `Unknown command: ${rawCommand}`);
         print(ctx.stderr, usageText());
         return 1;
     }
