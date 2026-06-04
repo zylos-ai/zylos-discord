@@ -64,8 +64,8 @@ Commands:
   set-thread-mode <parentChannelId> <threadId> <mention|smart>
   set-channel-history-limit <channelId> <1..200>
   set-channel-reaction-notify <channelId> <off|own|all>
-  set-channel-allowfrom <channelId> <userId|*...>
-  add-channel-allow <channelId> <userId|*>
+  set-channel-allowfrom <channelId> <userId|*...>  (* = all senders)
+  add-channel-allow <channelId> <userId|*>         (* = all senders)
   remove-channel-allow <channelId> <userId|*>
   list-channel-allow <channelId>
 

@@ -6,7 +6,7 @@
  * Receives a JSON object on stdin and writes component-owned config.json.
  *
  * Example stdin:
- *   { "DISCORD_API_KEY": "secret" }
+ *   { "DISCORD_BOT_TOKEN": "secret" }
  */
 
 import fs from 'node:fs';
