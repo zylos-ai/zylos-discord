@@ -77,7 +77,7 @@ Describe error handling strategies.
 ### Deferred (intentionally not built — with rationale)
 - **Inbound poll-vote awareness — DEFERRED (2026-06-04, Felix).** Polls are **outbound-only**: the channel can post a native Discord `poll` (via the `[POLL]` send marker → `poll` object), but it does **not** subscribe to `MessagePollVoteAdd` / `MessagePollVoteRemove`, so the agent is **not** notified when users vote or when a poll closes. Rationale: outbound polls cover the core use case (the agent asking a question); vote/result tracking is a meaningful add (event handlers + result aggregation) with no current need. Revisit if a use case needs the agent to act on poll results.
 - **Voice-ASR first-run guided recovery — DEFERRED (→ prod-readiness review).** Voice STT auto-detects `~/zylos/bin/transcribe` and degrades silently when absent (no install prompt, no self-create). A future flow: first voice-without-ASR → one-time owner prompt offering to install Whisper, then provision it. Tracked for the production-readiness review.
-- **Voice-note "transcribing" indicator — DEFERRED (smoke-test finding).** The 👀 thinking-reaction / typing indicator is set *after* media+transcription resolves, so a slow voice note shows no feedback during the (multi-second) Whisper run. Fix: set the indicator *before* starting transcription.
+- **Voice-note "transcribing" indicator — DEFERRED (smoke-test finding).** The 💡 thinking-reaction / typing indicator is set *after* media+transcription resolves, so a slow voice note shows no feedback during the (multi-second) Whisper run. Fix: set the indicator *before* starting transcription.
 
 ### Notable decisions made during the build
 - **Owner always bypasses `groupPolicy=disabled`** (cross-channel standard, M3).
