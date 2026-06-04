@@ -19,9 +19,13 @@
 
 ---
 
-- **Feature 1** — description
-- **Feature 2** — description
-- **Feature 3** — description
+- **Gateway connection** - persistent Discord Gateway WebSocket; no public
+  webhook or Caddy route required.
+- **DM and server access control** - owner binding, DM policies, server
+  allowlists, mention mode, smart mode, and DM pairing approval.
+- **Rich Discord events** - forwards replies, attachments, voice-note
+  transcripts, stickers, reactions, edits, deletes, forum/media-root threads,
+  and outbound native polls.
 
 ## Install
 
@@ -43,14 +47,35 @@ Edit `~/zylos/components/discord/config.json`:
 
 ```json
 {
-  "enabled": true
+  "enabled": true,
+  "botToken": "DISCORD_BOT_TOKEN",
+  "owner": "123456789012345678",
+  "dmPolicy": "pairing",
+  "groupPolicy": "allowlist",
+  "channels": {
+    "234567890123456789": {
+      "name": "general",
+      "mode": "mention",
+      "allowFrom": ["123456789012345678"]
+    }
+  }
 }
 ```
 
 ## Usage
 
 ```bash
-# Example usage
+# Manage owner, DM policy, server channels, and allowlists
+node ~/zylos/.claude/skills/discord/src/admin.js --help
+
+# Add a server channel in mention mode; it defaults to owner-only access
+node ~/zylos/.claude/skills/discord/src/admin.js add-channel 234567890123456789 general mention
+
+# Allow all senders for a configured server channel
+node ~/zylos/.claude/skills/discord/src/admin.js set-channel-allowfrom 234567890123456789 '*'
+
+# Send an outbound C4 reply to Discord; message content is read from stdin
+cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "234567890123456789|msg:345678901234567890"
 ```
 
 ## Built by Coco

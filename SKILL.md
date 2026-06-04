@@ -88,7 +88,10 @@ cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint
   as `mention` mode with `allowFrom:[ownerId]`. Broaden access explicitly with
   `add-channel-allow <channelId> <userId>` or `add-channel-allow <channelId> *`;
   replace the whole sender list with
-  `set-channel-allowfrom <channelId> <userId|*...>`.
+  `set-channel-allowfrom <channelId> <userId|*...>`. The runtime treats an
+  empty `allowFrom` list as allow-all, but the admin CLI requires at least one
+  entry to avoid accidental clear-to-anyone; use `*` as the explicit all-senders
+  value.
 - **Group aliases:** Discord stores server access as `channels{}`, but
   `group-*` admin commands are aliases of the matching `channel-*` commands
   for cross-channel CLI parity.
