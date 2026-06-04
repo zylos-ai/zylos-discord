@@ -19,6 +19,7 @@ export function isDmAuthorized(config, userId) {
     case 'open':
       return true;
     case 'allowlist':
+    case 'pairing':
       return (config.dmAllowFrom || []).map(String).includes(String(userId));
     case 'owner':
     default:

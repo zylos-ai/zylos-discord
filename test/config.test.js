@@ -91,6 +91,26 @@ describe('config', () => {
     });
   });
 
+  it('normalizes dmPolicy values while accepting pairing', async () => {
+    const home = makeHome();
+    const mod = await importConfig(home);
+    fs.mkdirSync(mod.DATA_DIR, { recursive: true });
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      dmPolicy: 'PAIRING'
+    }));
+
+    expect(mod.loadConfig()).toMatchObject({
+      dmPolicy: 'pairing'
+    });
+
+    fs.writeFileSync(mod.CONFIG_PATH, JSON.stringify({
+      dmPolicy: 'everyone'
+    }));
+    expect(mod.loadConfig()).toMatchObject({
+      dmPolicy: 'owner'
+    });
+  });
+
   it('normalizes unsupported reactionNotifyMode values to own', async () => {
     const home = makeHome();
     const mod = await importConfig(home);

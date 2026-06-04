@@ -4,7 +4,9 @@ import { resolveGuildAccess } from '../src/lib/auth.js';
 
 function makeHarness(initialConfig, saveResult = true) {
   let config = JSON.parse(JSON.stringify(initialConfig));
+  let pairingState = { pending: {}, denied: {} };
   const saved = [];
+  const savedPairing = [];
   const stdout = { text: '', write(chunk) { this.text += chunk; } };
   const stderr = { text: '', write(chunk) { this.text += chunk; } };
   const options = {
@@ -16,9 +18,25 @@ function makeHarness(initialConfig, saveResult = true) {
       saved.push(JSON.parse(JSON.stringify(nextConfig)));
       config = nextConfig;
       return true;
+    },
+    loadPairingState: () => pairingState,
+    savePairingState: (nextState) => {
+      if (!saveResult) return false;
+      savedPairing.push(JSON.parse(JSON.stringify(nextState)));
+      pairingState = nextState;
+      return true;
     }
   };
-  return { get config() { return config; }, saved, stdout, stderr, options };
+  return {
+    get config() { return config; },
+    get pairingState() { return pairingState; },
+    set pairingState(nextState) { pairingState = nextState; },
+    saved,
+    savedPairing,
+    stdout,
+    stderr,
+    options
+  };
 }
 
 describe('admin CLI', () => {
@@ -42,12 +60,12 @@ describe('admin CLI', () => {
     const harness = makeHarness({ channels: {} });
 
     expect(runAdmin(['set-owner', '1234567890'], harness.options)).toBe(0);
-    expect(runAdmin(['set-dm-policy', 'ALLOWLIST'], harness.options)).toBe(0);
+    expect(runAdmin(['set-dm-policy', 'PAIRING'], harness.options)).toBe(0);
     expect(runAdmin(['set-group-policy', 'OPEN'], harness.options)).toBe(0);
     expect(runAdmin(['set-group-policy', 'DISABLED'], harness.options)).toBe(0);
 
     expect(harness.config.owner).toBe('1234567890');
-    expect(harness.config.dmPolicy).toBe('allowlist');
+    expect(harness.config.dmPolicy).toBe('pairing');
     expect(harness.config.groupPolicy).toBe('disabled');
     expect(harness.saved).toHaveLength(4);
   });
@@ -62,6 +80,60 @@ describe('admin CLI', () => {
     expect(runAdmin(['remove-dm-allow', '123456'], harness.options)).toBe(0);
 
     expect(harness.config.dmAllowFrom).toEqual(['555555']);
+  });
+
+  it('lists pending DM pairing requests with an empty state message', () => {
+    const harness = makeHarness({});
+
+    expect(runAdmin(['dm-pending'], harness.options)).toBe(0);
+    expect(harness.stdout.text).toContain('No pending DM pairing requests');
+
+    harness.stdout.text = '';
+    harness.pairingState = {
+      pending: {
+        1234567890: {
+          userId: '1234567890',
+          name: 'Felix',
+          requestedAt: '2026-06-04T00:00:00.000Z',
+          firstMessage: 'hello'
+        }
+      },
+      denied: {}
+    };
+
+    expect(runAdmin(['dm-pending'], harness.options)).toBe(0);
+    expect(harness.stdout.text).toContain('1234567890 - Felix');
+    expect(harness.stdout.text).toContain('requestedAt: 2026-06-04T00:00:00.000Z');
+    expect(harness.stdout.text).toContain('firstMessage: hello');
+  });
+
+  it('approves and denies DM pairing requests through owner-only state mutation', () => {
+    const harness = makeHarness({
+      dmPolicy: 'pairing',
+      dmAllowFrom: ['1111111111']
+    });
+    harness.pairingState = {
+      pending: {
+        1234567890: { userId: '1234567890', name: 'Felix' },
+        2222222222: { userId: '2222222222', name: 'Blocked' }
+      },
+      denied: {
+        1234567890: { userId: '1234567890', reason: 'old' }
+      }
+    };
+
+    expect(runAdmin(['dm-approve', '1234567890'], harness.options)).toBe(0);
+    expect(harness.config.dmAllowFrom).toEqual(['1111111111', '1234567890']);
+    expect(harness.pairingState.pending['1234567890']).toBeUndefined();
+    expect(harness.pairingState.denied['1234567890']).toBeUndefined();
+
+    expect(runAdmin(['dm-deny', '2222222222', 'spam', 'risk'], harness.options)).toBe(0);
+    expect(harness.pairingState.pending['2222222222']).toBeUndefined();
+    expect(harness.pairingState.denied['2222222222']).toMatchObject({
+      userId: '2222222222',
+      reason: 'spam risk'
+    });
+    expect(harness.savedPairing).toHaveLength(2);
   });
 
   it('adds channels without clobbering existing configuration', () => {
@@ -212,6 +284,9 @@ describe('admin CLI', () => {
 
     expect(runAdmin(['help'], harness.options)).toBe(0);
     expect(harness.stdout.text).toContain('set-owner <userId>');
+    expect(harness.stdout.text).toContain('set-dm-policy <open|allowlist|owner|pairing>');
+    expect(harness.stdout.text).toContain('dm-pending');
+    expect(harness.stdout.text).toContain('dm-approve <userId>');
     expect(harness.stdout.text).toContain('set-channel-reaction-notify');
     expect(harness.stdout.text).toContain('set-thread-mode');
     expect(harness.stdout.text).toContain('Changes apply live');

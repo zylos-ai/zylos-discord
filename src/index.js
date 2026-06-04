@@ -25,6 +25,12 @@ import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig }
 import { channelHistoryLimit, ensureReplay, getHistory } from './lib/context.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
 import {
+  buildPairingNotification,
+  loadPairingState,
+  savePairingState
+} from './lib/dm-pairing.js';
+import { handleUnauthorizedPairingDm } from './lib/dm-pairing-handler.js';
+import {
   autoRegisterOwnerMentionedChannel,
   isBotMentioned,
   resolvePolicyChannelId,
@@ -188,6 +194,23 @@ async function notifyOwnerChannelAutoRegistered({ ownerId, policyChannelId }) {
   } catch (err) {
     console.warn(`${LOG} failed to notify owner about auto-registered channel: ${err.message}`);
   }
+}
+
+async function notifyOwnerDmPairingRequest({ userId, name, firstMessage }) {
+  const ownerId = loadConfig().owner;
+  if (!ownerId) return;
+  const notification = buildPairingNotification({ userId, name, firstMessage });
+
+  try {
+    const owner = await client.users.fetch(ownerId);
+    await owner.send(notification);
+  } catch (err) {
+    console.warn(`${LOG} failed to notify owner about DM pairing request: ${err.message}`);
+  }
+
+  sendToC4('discord', 'admin|type:dm-pairing', notification, (errMsg) => {
+    console.warn(`${LOG} C4 rejected DM pairing admin notice: ${errMsg}`);
+  });
 }
 
 function getAttachments(message) {
@@ -469,6 +492,19 @@ async function handleDirectMessage(message) {
 
   config = loadConfig();
   if (!isDmAuthorized(config, userId)) {
+    const pairing = await handleUnauthorizedPairingDm({
+      config,
+      userId,
+      name: username,
+      channelId: message.channel.id,
+      firstMessage: text,
+      loadPairingState,
+      savePairingState,
+      notifyOwner: notifyOwnerDmPairingRequest,
+      reply: (replyText) => message.reply(replyText).catch(() => {})
+    });
+    if (pairing.handled) return;
+
     await message.reply('Sorry, this bot is private.').catch(() => {});
     return;
   }

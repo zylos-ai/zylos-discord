@@ -32,6 +32,9 @@ describe('auth', () => {
     expect(isDmAuthorized({ owner: '1', dmPolicy: 'open' }, '2')).toBe(true);
     expect(isDmAuthorized({ owner: '1', dmPolicy: 'allowlist', dmAllowFrom: [2] }, '2')).toBe(true);
     expect(isDmAuthorized({ owner: '1', dmPolicy: 'allowlist', dmAllowFrom: ['3'] }, '2')).toBe(false);
+    expect(isDmAuthorized({ owner: '1', dmPolicy: 'pairing', dmAllowFrom: [2] }, '2')).toBe(true);
+    expect(isDmAuthorized({ owner: '1', dmPolicy: 'pairing', dmAllowFrom: ['3'] }, '2')).toBe(false);
+    expect(isDmAuthorized({ owner: '1', dmPolicy: 'pairing', dmAllowFrom: [] }, '1')).toBe(true);
   });
 
   it('authorizes configured guild channels only when group policy is enabled', () => {
