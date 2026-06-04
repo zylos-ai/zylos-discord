@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR } from './config.js';
 
-export const THINKING_REACTION = '👀';
+export const THINKING_REACTION = '💡';
 
 const TYPING_DIR = path.join(DATA_DIR, 'typing');
 const TYPING_TIMEOUT_MS = 120 * 1000;
