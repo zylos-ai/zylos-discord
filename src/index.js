@@ -21,13 +21,14 @@ import {
   formatReactionEvent,
   sendToC4
 } from './lib/c4.js';
-import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig } from './lib/config.js';
+import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, updateConfig, watchConfig } from './lib/config.js';
 import { channelHistoryLimit, ensureReplay, getHistory } from './lib/context.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
 import {
   buildPairingNotification,
   loadPairingState,
-  savePairingState
+  savePairingState,
+  updatePairingState
 } from './lib/dm-pairing.js';
 import { handleUnauthorizedPairingDm } from './lib/dm-pairing-handler.js';
 import {
@@ -381,6 +382,7 @@ async function handleGuildMessage(message) {
     message,
     clientUser: client.user,
     saveConfig,
+    updateConfig,
     notifyOwner: notifyOwnerChannelAutoRegistered
   });
   if (autoRegister.error === 'save_failed') {
@@ -482,12 +484,18 @@ async function handleDirectMessage(message) {
   const hasSticker = stickers.length > 0;
 
   if (!hasOwner(config)) {
-    bindOwnerIfUnset(config, userId);
-    if (!saveConfig(config)) {
+    const ownerUpdate = updateConfig((nextConfig) => {
+      if (hasOwner(nextConfig)) return false;
+      bindOwnerIfUnset(nextConfig, userId);
+      return true;
+    });
+    if (!ownerUpdate.ok) {
       await message.reply('Internal error, please try again.').catch(() => {});
       return;
     }
-    await message.reply('You are now the owner (admin) of this bot.').catch(() => {});
+    if (ownerUpdate.saved) {
+      await message.reply('You are now the owner (admin) of this bot.').catch(() => {});
+    }
   }
 
   config = loadConfig();
@@ -500,6 +508,7 @@ async function handleDirectMessage(message) {
       firstMessage: text,
       loadPairingState,
       savePairingState,
+      updatePairingState,
       notifyOwner: notifyOwnerDmPairingRequest,
       reply: (replyText) => message.reply(replyText).catch(() => {})
     });

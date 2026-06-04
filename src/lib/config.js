@@ -7,10 +7,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withFileLockSync } from './file-lock.js';
 
 const HOME = process.env.HOME;
 export const DATA_DIR = path.join(HOME, 'zylos/components/discord');
 export const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+export const STATE_LOCK_PATH = path.join(DATA_DIR, '.state.lock');
 const ENV_PATH = path.join(HOME, 'zylos/.env');
 
 // Default configuration
@@ -159,6 +161,10 @@ export function getConfig() {
  * @param {Object} newConfig - Configuration to save
  */
 export function saveConfig(newConfig) {
+  return withStateLock(() => writeConfigFile(newConfig));
+}
+
+function writeConfigFile(newConfig) {
   const tmpPath = CONFIG_PATH + '.tmp';
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -173,6 +179,24 @@ export function saveConfig(newConfig) {
     } catch {}
     return false;
   }
+}
+
+export function withStateLock(fn, options = {}) {
+  return withFileLockSync(STATE_LOCK_PATH, fn, options);
+}
+
+export function updateConfig(mutator) {
+  return withStateLock(() => {
+    const nextConfig = loadConfig();
+    const result = mutator(nextConfig);
+    if (result === false) {
+      return { ok: true, saved: false, config: nextConfig, result };
+    }
+    if (!writeConfigFile(nextConfig)) {
+      return { ok: false, saved: false, config: nextConfig, result };
+    }
+    return { ok: true, saved: true, config: nextConfig, result };
+  });
 }
 
 /**

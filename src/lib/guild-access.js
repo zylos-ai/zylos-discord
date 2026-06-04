@@ -36,11 +36,51 @@ export async function autoRegisterOwnerMentionedChannel({
   message,
   clientUser,
   saveConfig,
+  updateConfig,
   notifyOwner
 }) {
   const userId = String(message?.author?.id || '');
   const policyChannelId = resolvePolicyChannelId(message);
-  if (!policyChannelId || !isOwner(config, userId)) {
+  if (!policyChannelId) {
+    return { registered: false };
+  }
+
+  if (updateConfig) {
+    let registration = null;
+    const updated = updateConfig((nextConfig) => {
+      if (!policyChannelId || !isOwner(nextConfig, userId)) return false;
+      const channels = ensureChannels(nextConfig);
+      if (Object.prototype.hasOwnProperty.call(channels, String(policyChannelId))) return false;
+      if (!isBotMentioned(message, clientUser)) return false;
+      const channelName = resolvePolicyChannelName(message, policyChannelId);
+      channels[String(policyChannelId)] = {
+        name: channelName,
+        mode: 'mention',
+        allowFrom: nextConfig.owner ? [String(nextConfig.owner)] : []
+      };
+      registration = {
+        policyChannelId: String(policyChannelId),
+        channelName,
+        ownerId: String(nextConfig.owner || userId)
+      };
+      return true;
+    });
+
+    if (!updated.ok) {
+      return { registered: false, error: 'save_failed' };
+    }
+    if (!registration) {
+      return { registered: false };
+    }
+    try {
+      await notifyOwner?.(registration);
+    } catch {
+      return { registered: true, notified: false, ...registration };
+    }
+    return { registered: true, notified: true, ...registration };
+  }
+
+  if (!isOwner(config, userId)) {
     return { registered: false };
   }
 
