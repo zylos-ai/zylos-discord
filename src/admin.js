@@ -12,7 +12,7 @@ import { loadConfig, saveConfig } from './lib/config.js';
 const SNOWFLAKE_RE = /^\d{5,25}$/;
 const HISTORY_LIMIT_RE = /^(?:[1-9]\d*)$/;
 const DM_POLICIES = new Set(['open', 'allowlist', 'owner']);
-const GROUP_POLICIES = new Set(['disabled', 'allowlist']);
+const GROUP_POLICIES = new Set(['disabled', 'allowlist', 'open']);
 const CHANNEL_MODES = new Set(['mention', 'smart']);
 const REACTION_NOTIFY_MODES = new Set(['off', 'own', 'all']);
 
@@ -35,15 +35,16 @@ Commands:
   remove-dm-allow <userId>
   list-dm-allow
 
-  set-group-policy <disabled|allowlist>
-  add-channel <channelId> <name> [mention|smart]
+  set-group-policy <disabled|allowlist|open>
+  add-channel <channelId> <name> [mention|smart]  (defaults owner-only)
   remove-channel <channelId>
   list-channels
   set-channel-mode <channelId> <mention|smart>
+  set-thread-mode <parentChannelId> <threadId> <mention|smart>
   set-channel-history-limit <channelId> <1..200>
   set-channel-reaction-notify <channelId> <off|own|all>
-  add-channel-allow <channelId> <userId>
-  remove-channel-allow <channelId> <userId>
+  add-channel-allow <channelId> <userId|*>
+  remove-channel-allow <channelId> <userId|*>
   list-channel-allow <channelId>
 
   help`;
@@ -82,6 +83,12 @@ function normalizeSnowflake(value, label) {
     throw new Error(`invalid ${label}`);
   }
   return normalized;
+}
+
+function normalizeChannelAllowEntry(value) {
+  const normalized = String(value || '').trim();
+  if (normalized === '*') return normalized;
+  return normalizeSnowflake(normalized, 'user id');
 }
 
 function normalizeChannelName(value) {
@@ -126,6 +133,19 @@ function requireChannel(config, channelId) {
   if (!Array.isArray(channel.allowFrom)) channel.allowFrom = [];
   channel.allowFrom = channel.allowFrom.map(String);
   return channel;
+}
+
+function ensureThreads(channel) {
+  if (!channel.threads || typeof channel.threads !== 'object' || Array.isArray(channel.threads)) {
+    channel.threads = {};
+  }
+  return channel.threads;
+}
+
+function defaultChannelAllowFrom(config, ctx) {
+  if (config.owner) return [String(config.owner)];
+  print(ctx.stderr, 'Owner not configured; channel allowFrom defaults to anyone');
+  return [];
 }
 
 function addUnique(list, value) {
@@ -253,7 +273,7 @@ export function runAdmin(argv = [], options = {}) {
           print(ctx.stdout, `Channel ${channelId} already configured`);
           return 0;
         }
-        channels[channelId] = { name, mode, allowFrom: [] };
+        channels[channelId] = { name, mode, allowFrom: defaultChannelAllowFrom(config, ctx) };
         saveOrThrow(config, ctx.saveConfig);
         return success(ctx, `Added channel ${channelId} (${name}) mode=${mode}`);
       }
@@ -290,6 +310,12 @@ export function runAdmin(argv = [], options = {}) {
           print(ctx.stdout, `  allowFrom: ${allow}`);
           print(ctx.stdout, `  historyLimit: ${channel.historyLimit || config.historyLimit || 5}`);
           print(ctx.stdout, `  reactionNotifyMode: ${channel.reactionNotifyMode || config.reactionNotifyMode || 'own'}`);
+          const threads = channel.threads && typeof channel.threads === 'object' && !Array.isArray(channel.threads)
+            ? Object.entries(channel.threads)
+            : [];
+          for (const [threadId, thread] of threads) {
+            print(ctx.stdout, `  thread ${threadId}: mode=${thread?.mode || channel.mode || 'mention'}`);
+          }
         }
         return 0;
       }
@@ -301,6 +327,20 @@ export function runAdmin(argv = [], options = {}) {
         requireChannel(config, channelId).mode = mode;
         saveOrThrow(config, ctx.saveConfig);
         return success(ctx, `Set channel ${channelId} mode=${mode}`);
+      }
+
+      case 'set-thread-mode': {
+        const channelId = normalizeSnowflake(args[0], 'channel id');
+        const threadId = normalizeSnowflake(args[1], 'thread id');
+        const mode = normalizeEnum(args[2], CHANNEL_MODES, 'mode');
+        const config = ctx.loadConfig();
+        const channel = requireChannel(config, channelId);
+        ensureThreads(channel)[threadId] = {
+          ...(channel.threads?.[threadId] || {}),
+          mode
+        };
+        saveOrThrow(config, ctx.saveConfig);
+        return success(ctx, `Set thread ${threadId} mode=${mode}`);
       }
 
       case 'set-channel-history-limit': {
@@ -323,7 +363,7 @@ export function runAdmin(argv = [], options = {}) {
 
       case 'add-channel-allow': {
         const channelId = normalizeSnowflake(args[0], 'channel id');
-        const userId = normalizeSnowflake(args[1], 'user id');
+        const userId = normalizeChannelAllowEntry(args[1]);
         const config = ctx.loadConfig();
         const channel = requireChannel(config, channelId);
         const added = addUnique(channel.allowFrom, userId);
@@ -337,7 +377,7 @@ export function runAdmin(argv = [], options = {}) {
 
       case 'remove-channel-allow': {
         const channelId = normalizeSnowflake(args[0], 'channel id');
-        const userId = normalizeSnowflake(args[1], 'user id');
+        const userId = normalizeChannelAllowEntry(args[1]);
         const config = ctx.loadConfig();
         const channel = requireChannel(config, channelId);
         const removed = removeValue(channel.allowFrom, userId);

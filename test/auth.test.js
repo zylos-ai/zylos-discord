@@ -51,10 +51,74 @@ describe('auth', () => {
     expect(isSmartChannel({ ...config, groupPolicy: 'disabled' }, 'parent2')).toBe(false);
   });
 
+  it('honors open group policy for unconfigured channels without making them smart', () => {
+    const config = {
+      groupPolicy: 'open',
+      channels: {
+        parent1: { mode: 'smart' }
+      }
+    };
+
+    expect(isChannelAllowed(config, 'missing')).toBe(true);
+    expect(isSmartChannel(config, 'missing')).toBe(false);
+    expect(resolveGuildAccess(config, 'missing', 'user1')).toMatchObject({
+      ok: true,
+      owner: false,
+      allowed: true,
+      smart: false
+    });
+    expect(resolveGuildAccess({ ...config, groupPolicy: 'disabled' }, 'missing', 'user1')).toMatchObject({
+      ok: false,
+      owner: false,
+      allowed: false,
+      smart: false
+    });
+  });
+
   it('authorizes guild senders with empty allowFrom as anyone', () => {
     expect(isSenderAllowed({ channels: { c1: {} } }, 'c1', 'user1')).toBe(true);
+    expect(isSenderAllowed({ channels: { c1: { allowFrom: ['*'] } } }, 'c1', 'user1')).toBe(true);
     expect(isSenderAllowed({ channels: { c1: { allowFrom: [123] } } }, 'c1', '123')).toBe(true);
     expect(isSenderAllowed({ channels: { c1: { allowFrom: ['abc'] } } }, 'c1', '123')).toBe(false);
+  });
+
+  it('uses per-thread smart mode overrides without changing parent access gates', () => {
+    const config = {
+      owner: 'owner1',
+      groupPolicy: 'allowlist',
+      channels: {
+        parent1: {
+          mode: 'mention',
+          allowFrom: ['user1'],
+          threads: {
+            thread1: { mode: 'smart' }
+          }
+        },
+        parent2: {
+          mode: 'smart',
+          allowFrom: ['user1'],
+          threads: {
+            thread2: { mode: 'mention' }
+          }
+        }
+      }
+    };
+
+    expect(isSmartChannel(config, 'parent1', 'thread1')).toBe(true);
+    expect(isSmartChannel(config, 'parent1', 'unknown')).toBe(false);
+    expect(isSmartChannel(config, 'parent2', 'thread2')).toBe(false);
+    expect(resolveGuildAccess(config, 'parent1', 'user1', 'thread1')).toMatchObject({
+      ok: true,
+      owner: false,
+      allowed: true,
+      smart: true
+    });
+    expect(resolveGuildAccess(config, 'parent1', 'user2', 'thread1')).toMatchObject({
+      ok: false,
+      owner: false,
+      allowed: true,
+      smart: true
+    });
   });
 
   it('lets the owner bypass disabled guild policy without opening it to non-owners', () => {

@@ -71,10 +71,17 @@ cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint
 
 - **Connection:** Gateway WebSocket (discord.js v14). No webhook / Caddy route.
 - **Setup:** bot token + enable Message Content Intent + invite the bot to a server.
+
+## Access Control
+
 - **Owner:** the first user to DM the bot becomes the owner (admin).
 - **Guild access:** the owner may use server channels even when `groupPolicy`
   is `disabled`; non-owner server access still follows configured channel and
   sender policy.
+- **Server channel defaults:** adding a channel manually with `add-channel` or
+  automatically via the owner's first bot mention registers the parent channel
+  as `mention` mode with `allowFrom:[ownerId]`. Broaden access explicitly with
+  `add-channel-allow <channelId> <userId>` or `add-channel-allow <channelId> *`.
 - **Reaction notices:** per-channel `reactionNotifyMode` can be `own` (default),
   `all`, or `off`; use `set-channel-reaction-notify` in the admin CLI.
 - **Voice STT:** inbound Discord voice-note attachments are transcribed inline

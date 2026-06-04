@@ -1,4 +1,5 @@
 import { isDmAuthorized, resolveGuildAccess } from './auth.js';
+import { resolvePolicyChannelId, resolvePolicyThreadId } from './guild-access.js';
 import { THINKING_REACTION } from './reactions.js';
 
 export function messageText(message) {
@@ -46,8 +47,7 @@ export function displayName(user) {
 }
 
 export function resolvePolicyChannelIdFromMessage(message) {
-  const isThread = message?.channel?.isThread?.() || false;
-  return isThread ? (message.channel.parentId || message.channel.id) : message?.channel?.id;
+  return resolvePolicyChannelId(message);
 }
 
 export function isMessageAuthorized(config, message, userId) {
@@ -57,7 +57,7 @@ export function isMessageAuthorized(config, message, userId) {
   }
   if (message.inGuild?.()) {
     const policyChannelId = resolvePolicyChannelIdFromMessage(message);
-    return resolveGuildAccess(config, policyChannelId, userId).ok;
+    return resolveGuildAccess(config, policyChannelId, userId, resolvePolicyThreadId(message)).ok;
   }
   return false;
 }

@@ -81,6 +81,7 @@ Describe error handling strategies.
 
 ### Notable decisions made during the build
 - **Owner always bypasses `groupPolicy=disabled`** (cross-channel standard, M3).
+- **Discord channel adds default owner-only** (`allowFrom:[ownerId]`, mention mode) for both manual `add-channel` and owner-mention auto-add; this is intentionally stricter than Telegram #62, whose manual adds default to `['*']`.
 - **No per-slice live deploy** — all slices merged to `main`; one closeout release after live-fire on the final commit.
 - **Forum/media-root sends create a thread** (`POST /channels/{id}/threads`); a failed channel-type lookup **fails safe to the normal `/messages` path** rather than aborting the send.
 - **Voice transcription forwards a durable `[Voice] <transcript>` to history**, keeping the ephemeral audio path only in the live C4 payload.

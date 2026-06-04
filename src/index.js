@@ -25,6 +25,12 @@ import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, watchConfig }
 import { channelHistoryLimit, ensureReplay, getHistory } from './lib/context.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
 import {
+  autoRegisterOwnerMentionedChannel,
+  isBotMentioned,
+  resolvePolicyChannelId,
+  resolvePolicyThreadId
+} from './lib/guild-access.js';
+import {
   displayName,
   fetchIfPartial,
   getStickers,
@@ -164,11 +170,6 @@ async function main() {
   }
 }
 
-function resolvePolicyChannelId(message) {
-  const isThread = message.channel?.isThread?.() || false;
-  return isThread ? (message.channel.parentId || message.channel.id) : message.channel.id;
-}
-
 function resolveChannelName(config, message, policyChannelId, isThread) {
   const configuredName = config.channels?.[String(policyChannelId)]?.name;
   const parentName = configuredName || message.channel?.parent?.name || String(policyChannelId);
@@ -178,6 +179,15 @@ function resolveChannelName(config, message, policyChannelId, isThread) {
 
   const threadName = message.channel?.name;
   return threadName ? `${parentName} / ${threadName}` : parentName;
+}
+
+async function notifyOwnerChannelAutoRegistered({ ownerId, policyChannelId }) {
+  try {
+    const owner = await client.users.fetch(ownerId);
+    await owner.send(`Auto-registered <#${policyChannelId}> as owner-only (mention mode). Use add-channel-allow to let others in.`);
+  } catch (err) {
+    console.warn(`${LOG} failed to notify owner about auto-registered channel: ${err.message}`);
+  }
 }
 
 function getAttachments(message) {
@@ -333,6 +343,7 @@ async function handleGuildMessage(message) {
   const config = loadConfig();
   const isThread = message.channel?.isThread?.() || false;
   const policyChannelId = resolvePolicyChannelId(message);
+  const threadId = resolvePolicyThreadId(message);
   const historyKey = message.channel.id;
   const attachments = getAttachments(message);
   const firstAttachment = attachments[0];
@@ -341,13 +352,25 @@ async function handleGuildMessage(message) {
   const hasSticker = stickers.length > 0;
 
   const userId = String(message.author.id);
-  const access = resolveGuildAccess(config, policyChannelId, userId);
+  const mentioned = isBotMentioned(message, client.user);
+  const autoRegister = await autoRegisterOwnerMentionedChannel({
+    config,
+    message,
+    clientUser: client.user,
+    saveConfig,
+    notifyOwner: notifyOwnerChannelAutoRegistered
+  });
+  if (autoRegister.error === 'save_failed') {
+    await message.reply('Internal error, please try again.').catch(() => {});
+    return;
+  }
+
+  const access = resolveGuildAccess(config, policyChannelId, userId, threadId);
   if (!access.ok) return;
 
   const text = message.cleanContent || message.content || '';
   if (!text.trim() && !hasAttachment && !hasSticker) return;
 
-  const mentioned = message.mentions?.has?.(client.user) || false;
   const forwarding = resolveGuildMessageForwarding({
     access,
     mentioned,
