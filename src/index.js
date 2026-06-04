@@ -13,6 +13,7 @@ import {
   resolveGuildAccess
 } from './lib/auth.js';
 import {
+  buildEventEndpoint,
   buildEndpoint,
   formatDmMessage,
   formatGroupMessage,
@@ -258,10 +259,7 @@ function eventEndpoint(message, kind) {
   const channelId = message?.channel?.id;
   const messageId = message?.id;
   if (!channelId || !messageId) return null;
-  return buildEndpoint(channelId, {
-    messageId,
-    correlationId: `${channelId}:${messageId}:${kind}`
-  });
+  return buildEventEndpoint(channelId, { messageId, kind });
 }
 
 function sendDiscordEvent(message, kind, content) {
@@ -299,9 +297,15 @@ async function resolveInboundMedia(config, attachment, { download, message = nul
 }
 
 async function handleReactionEvent(reaction, user, action) {
-  const fetchedReaction = await fetchIfPartial(reaction);
+  const fetchedReaction = await fetchIfPartial(reaction, {
+    kind: `reaction:${action}`,
+    warn: (detail) => console.warn(`${LOG} ${detail}`)
+  });
   if (!fetchedReaction?.message) return;
-  const message = await fetchIfPartial(fetchedReaction.message);
+  const message = await fetchIfPartial(fetchedReaction.message, {
+    kind: `reaction:${action}:message`,
+    warn: (detail) => console.warn(`${LOG} ${detail}`)
+  });
   if (!message?.channel) return;
   rememberMessageMetadata(message);
 
@@ -322,11 +326,14 @@ async function handleReactionEvent(reaction, user, action) {
     emoji: reactionEmoji(fetchedReaction),
     targetText: messageText(message) || '[no text]'
   });
-  sendDiscordEvent(message, `reaction:${action}:${user?.id || ''}`, content);
+  sendDiscordEvent(message, `reaction:${action}:${reactionEmoji(fetchedReaction)}:${user?.id || ''}`, content);
 }
 
 async function handleMessageUpdate(oldMessage, newMessage) {
-  const fetchedNew = await fetchIfPartial(newMessage);
+  const fetchedNew = await fetchIfPartial(newMessage, {
+    kind: 'message:update',
+    warn: (detail) => console.warn(`${LOG} ${detail}`)
+  });
   if (!fetchedNew?.channel) return;
   rememberMessageMetadata(fetchedNew);
 
@@ -412,6 +419,14 @@ async function handleGuildMessage(message) {
   });
   if (!forwarding.shouldForward) return;
 
+  const correlationId = `${historyKey}:${message.id}`;
+  if (forwarding.shouldRespond) {
+    await setReaction(message);
+    if (!forwarding.smartNoMention) {
+      startTyping(message.channel, correlationId);
+    }
+  }
+
   const shouldDownloadMedia = shouldDownloadInboundMedia({
     shouldRespond: forwarding.shouldRespond,
     hasAttachment,
@@ -450,16 +465,12 @@ async function handleGuildMessage(message) {
 
   if (!forwarding.shouldRespond) return;
 
-  const correlationId = `${historyKey}:${message.id}`;
   const endpoint = buildEndpoint(historyKey, { messageId: message.id, correlationId });
   const channelName = resolveChannelName(config, message, policyChannelId, isThread);
   const history = getHistory(historyKey, message.id, limit);
-  const replyingTo = await resolveReplyContext(message);
-
-  await setReaction(message);
-  if (!forwarding.smartNoMention) {
-    startTyping(message.channel, correlationId);
-  }
+  const replyingTo = await resolveReplyContext(message, {
+    warn: (detail) => console.warn(`${LOG} ${detail}`)
+  });
 
   const content = formatGroupMessage({
     channelName,
@@ -535,6 +546,10 @@ async function handleDirectMessage(message) {
     return;
   }
 
+  const correlationId = `${message.channel.id}:${message.id}`;
+  await setReaction(message);
+  startTyping(message.channel, correlationId);
+
   const media = hasAttachment && config.features?.downloadMedia !== false
     ? await resolveInboundMedia(config, firstAttachment, { download: true, message })
     : (hasAttachment ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` } : { filePath: null, note: null });
@@ -543,7 +558,6 @@ async function handleDirectMessage(message) {
   const noteText = stickerNote ? appendNote(text, stickerNote) : text;
   const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
 
-  const correlationId = `${message.channel.id}:${message.id}`;
   const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId });
 
   try {
@@ -558,10 +572,9 @@ async function handleDirectMessage(message) {
     console.warn(`${LOG} failed to record incoming DM: ${err.message}`);
   }
 
-  await setReaction(message);
-  startTyping(message.channel, correlationId);
-
-  const replyingTo = await resolveReplyContext(message);
+  const replyingTo = await resolveReplyContext(message, {
+    warn: (detail) => console.warn(`${LOG} ${detail}`)
+  });
   const content = formatDmMessage({ username, text: historyText, filePath: media.filePath, replyingTo });
   sendToC4('discord', endpoint, content, async (errMsg) => {
     stopTyping(correlationId);

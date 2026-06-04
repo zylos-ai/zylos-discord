@@ -35,4 +35,21 @@ describe('index hot-path config use', () => {
       expect(body, `${handler} should read cached config`).toContain('getConfig(');
     }
   });
+
+  it('starts response indicators before inbound media and voice resolution', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/index.js'), 'utf8');
+
+    for (const handler of ['handleGuildMessage', 'handleDirectMessage']) {
+      const body = functionBody(source, handler);
+      const reactionIndex = body.indexOf('setReaction(message)');
+      const typingIndex = body.indexOf('startTyping(message.channel, correlationId)');
+      const mediaIndex = body.indexOf('resolveInboundMedia(');
+
+      expect(reactionIndex, `${handler} should set a reaction`).toBeGreaterThanOrEqual(0);
+      expect(typingIndex, `${handler} should start typing`).toBeGreaterThanOrEqual(0);
+      expect(mediaIndex, `${handler} should resolve inbound media`).toBeGreaterThanOrEqual(0);
+      expect(reactionIndex, `${handler} reaction should precede media resolution`).toBeLessThan(mediaIndex);
+      expect(typingIndex, `${handler} typing should precede media resolution`).toBeLessThan(mediaIndex);
+    }
+  });
 });

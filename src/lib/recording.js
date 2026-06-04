@@ -152,7 +152,13 @@ async function handleClearThinking(req, res, internalToken) {
   }
 }
 
-export function startRecordingServer({ port, internalToken = getInternalToken() }) {
+export function startRecordingServer({
+  port,
+  internalToken = getInternalToken(),
+  maxRetries = MAX_RETRIES,
+  retryDelayMs = RETRY_DELAY_MS,
+  onFatal = (code) => process.exit(code)
+}) {
   if (server) return server;
 
   const listen = () => {
@@ -178,13 +184,23 @@ export function startRecordingServer({ port, internalToken = getInternalToken() 
   });
 
   server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE' && retries < MAX_RETRIES) {
+    if (err.code === 'EADDRINUSE' && retries < maxRetries) {
       retries += 1;
-      console.error(`[discord] internal port ${port} in use, retrying in ${RETRY_DELAY_MS}ms (${retries}/${MAX_RETRIES})`);
-      setTimeout(listen, RETRY_DELAY_MS);
+      console.error(`[discord] internal port ${port} in use, retrying in ${retryDelayMs}ms (${retries}/${maxRetries})`);
+      setTimeout(listen, retryDelayMs);
       return;
     }
     console.error(`[discord] internal recording server error: ${err.message}`);
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[discord] internal recording server failed after ${retries}/${maxRetries} retries; exiting for supervisor restart`);
+      const failedServer = server;
+      server = null;
+      retries = 0;
+      try {
+        failedServer?.close();
+      } catch {}
+      onFatal(1);
+    }
   });
 
   listen();

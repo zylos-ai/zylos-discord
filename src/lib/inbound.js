@@ -182,17 +182,19 @@ export function shouldDownloadInboundMedia({
   return !!shouldRespond && !!hasAttachment && downloadMediaEnabled !== false && !smartNoMention;
 }
 
-export async function fetchIfPartial(entity) {
+export async function fetchIfPartial(entity, { kind = 'partial', warn = null } = {}) {
   if (!entity?.partial) return entity;
   if (typeof entity.fetch !== 'function') return null;
   try {
     return await entity.fetch();
-  } catch {
+  } catch (err) {
+    const id = entity?.id || entity?.message?.id || 'unknown';
+    warn?.(`${kind} partial fetch failed id=${id}: ${err.message}`);
     return null;
   }
 }
 
-export async function resolveReplyContext(message) {
+export async function resolveReplyContext(message, { warn = null } = {}) {
   if (!message?.reference || typeof message.fetchReference !== 'function') return null;
   try {
     const referenced = await message.fetchReference();
@@ -202,7 +204,8 @@ export async function resolveReplyContext(message) {
       fromUserId: referenced.author?.id || '',
       text: messageText(referenced)
     };
-  } catch {
+  } catch (err) {
+    warn?.(`reply reference fetch failed message=${message?.id || 'unknown'} reference=${message.reference?.messageId || 'unknown'}: ${err.message}`);
     return null;
   }
 }
