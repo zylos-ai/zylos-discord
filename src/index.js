@@ -21,7 +21,7 @@ import {
   formatReactionEvent,
   sendToC4
 } from './lib/c4.js';
-import { DATA_DIR, getBotToken, getConfig, loadConfig, saveConfig, updateConfig, watchConfig } from './lib/config.js';
+import { DATA_DIR, getBotToken, getConfig, saveConfig, updateConfig, watchConfig } from './lib/config.js';
 import { channelHistoryLimit, ensureReplay, getHistory } from './lib/context.js';
 import { isSelfOrBotMessage, normalizeGatewayError, validateToken } from './lib/discord.js';
 import {
@@ -43,7 +43,9 @@ import {
   getStickers,
   messageText,
   reactionEmoji,
+  rememberMessageMetadata,
   resolveReplyContext,
+  resolveMessageForDelete,
   resolveGuildMessageForwarding,
   shouldDownloadInboundMedia,
   shouldForwardMessageDelete,
@@ -99,6 +101,7 @@ async function main() {
   });
 
   client.on(Events.MessageCreate, (message) => {
+    rememberMessageMetadata(message);
     if (isSelfOrBotMessage(message, client.user?.id)) return;
     if (message.channel?.isDMBased?.()) {
       handleDirectMessage(message).catch((err) => {
@@ -198,7 +201,7 @@ async function notifyOwnerChannelAutoRegistered({ ownerId, policyChannelId }) {
 }
 
 async function notifyOwnerDmPairingRequest({ userId, name, firstMessage }) {
-  const ownerId = loadConfig().owner;
+  const ownerId = getConfig().owner;
   if (!ownerId) return;
   const notification = buildPairingNotification({ userId, name, firstMessage });
 
@@ -300,8 +303,9 @@ async function handleReactionEvent(reaction, user, action) {
   if (!fetchedReaction?.message) return;
   const message = await fetchIfPartial(fetchedReaction.message);
   if (!message?.channel) return;
+  rememberMessageMetadata(message);
 
-  const config = loadConfig();
+  const config = getConfig();
   const reactionForCheck = { emoji: fetchedReaction.emoji, message };
   if (!shouldForwardReaction({
     config,
@@ -324,8 +328,9 @@ async function handleReactionEvent(reaction, user, action) {
 async function handleMessageUpdate(oldMessage, newMessage) {
   const fetchedNew = await fetchIfPartial(newMessage);
   if (!fetchedNew?.channel) return;
+  rememberMessageMetadata(fetchedNew);
 
-  const config = loadConfig();
+  const config = getConfig();
   if (!shouldForwardMessageUpdate({
     config,
     oldMessage,
@@ -344,10 +349,12 @@ async function handleMessageUpdate(oldMessage, newMessage) {
 }
 
 async function handleMessageDelete(message) {
-  const fetchedMessage = await fetchIfPartial(message);
+  const fetchedMessage = await resolveMessageForDelete(message, {
+    warn: (detail) => console.warn(`${LOG} ${detail}`)
+  });
   if (!fetchedMessage?.channel) return;
 
-  const config = loadConfig();
+  const config = getConfig();
   if (!shouldForwardMessageDelete({
     config,
     message: fetchedMessage,
@@ -364,7 +371,7 @@ async function handleMessageDelete(message) {
 }
 
 async function handleGuildMessage(message) {
-  const config = loadConfig();
+  const config = getConfig();
   const isThread = message.channel?.isThread?.() || false;
   const policyChannelId = resolvePolicyChannelId(message);
   const threadId = resolvePolicyThreadId(message);
@@ -473,7 +480,7 @@ async function handleGuildMessage(message) {
 }
 
 async function handleDirectMessage(message) {
-  let config = loadConfig();
+  let config = getConfig();
   const userId = String(message.author.id);
   const username = message.author.username || message.author.globalName || userId;
   const text = message.cleanContent || message.content || '';
@@ -498,7 +505,7 @@ async function handleDirectMessage(message) {
     }
   }
 
-  config = loadConfig();
+  config = getConfig();
   if (!isDmAuthorized(config, userId)) {
     const pairing = await handleUnauthorizedPairingDm({
       config,
