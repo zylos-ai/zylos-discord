@@ -72,7 +72,15 @@ Describe security considerations (authentication, authorization, data handling).
 
 Describe error handling strategies.
 
-## 7. Future Improvements
+## 7. Design decisions & deferred items
 
-- Improvement 1
-- Improvement 2
+### Deferred (intentionally not built — with rationale)
+- **Inbound poll-vote awareness — DEFERRED (2026-06-04, Felix).** Polls are **outbound-only**: the channel can post a native Discord `poll` (via the `[POLL]` send marker → `poll` object), but it does **not** subscribe to `MessagePollVoteAdd` / `MessagePollVoteRemove`, so the agent is **not** notified when users vote or when a poll closes. Rationale: outbound polls cover the core use case (the agent asking a question); vote/result tracking is a meaningful add (event handlers + result aggregation) with no current need. Revisit if a use case needs the agent to act on poll results.
+- **Voice-ASR first-run guided recovery — DEFERRED (→ prod-readiness review).** Voice STT auto-detects `~/zylos/bin/transcribe` and degrades silently when absent (no install prompt, no self-create). A future flow: first voice-without-ASR → one-time owner prompt offering to install Whisper, then provision it. Tracked for the production-readiness review.
+- **Voice-note "transcribing" indicator — DEFERRED (smoke-test finding).** The 👀 thinking-reaction / typing indicator is set *after* media+transcription resolves, so a slow voice note shows no feedback during the (multi-second) Whisper run. Fix: set the indicator *before* starting transcription.
+
+### Notable decisions made during the build
+- **Owner always bypasses `groupPolicy=disabled`** (cross-channel standard, M3).
+- **No per-slice live deploy** — all slices merged to `main`; one closeout release after live-fire on the final commit.
+- **Forum/media-root sends create a thread** (`POST /channels/{id}/threads`); a failed channel-type lookup **fails safe to the normal `/messages` path** rather than aborting the send.
+- **Voice transcription forwards a durable `[Voice] <transcript>` to history**, keeping the ephemeral audio path only in the live C4 payload.
