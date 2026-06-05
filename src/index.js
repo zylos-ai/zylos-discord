@@ -375,7 +375,6 @@ async function handleMessageUpdate(oldMessage, newMessage) {
 
   const content = formatMessageEditEvent({
     username: displayName(fetchedNew.author || oldMessage?.author),
-    oldText: messageText(oldMessage),
     newText: messageText(fetchedNew)
   });
   sendDiscordEvent(fetchedNew, 'edit', content);

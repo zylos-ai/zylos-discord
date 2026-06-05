@@ -193,15 +193,34 @@ describe('c4 helpers', () => {
       targetText: '<target>'
     })).toBe('[DISCORD REACTION] A&amp;B added &lt;:ok:1&gt; to "&lt;target&gt;"');
 
-    expect(formatMessageEditEvent({
-      username: 'C<D',
-      oldText: 'old',
-      newText: 'new & improved'
-    })).toBe('[DISCORD EDIT] C&lt;D edited a message from "old" to "new &amp; improved"');
-
     expect(formatMessageDeleteEvent({
       username: 'E>F',
       text: 'gone'
     })).toBe('[DISCORD DELETE] E&gt;F deleted a message: "gone"');
+  });
+
+  it('formats message edits with full current text and no before text', () => {
+    const current = `${'a'.repeat(150)} & more`;
+    const result = formatMessageEditEvent({
+      username: 'C<D',
+      oldText: 'old text should not appear',
+      newText: current
+    });
+
+    expect(result).toBe(`[DISCORD EDIT] C&lt;D edited their message - current text: "${'a'.repeat(150)} &amp; more"`);
+    expect(result).not.toContain('old text');
+  });
+
+  it('caps message edit current text at 4000 chars, not 120', () => {
+    const longText = 'x'.repeat(5000);
+    const result = formatMessageEditEvent({
+      username: 'Felix',
+      newText: longText
+    });
+    const body = result.match(/current text: "([^"]+)"/)?.[1];
+
+    expect(body).toHaveLength(4000);
+    expect(body.endsWith('...')).toBe(true);
+    expect(body).toContain('x'.repeat(200));
   });
 });
