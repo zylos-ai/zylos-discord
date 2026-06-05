@@ -1,6 +1,6 @@
 ---
 name: discord
-version: 0.1.0
+version: 0.1.1
 description: >
   Discord bot channel for Zylos agents. Use when the user wants to communicate
   via Discord — chat with the agent in Discord DMs or server channels, send or
