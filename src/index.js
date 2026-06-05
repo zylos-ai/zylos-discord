@@ -6,7 +6,6 @@
  */
 
 import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
-import { pathToFileURL } from 'node:url';
 import {
   bindOwnerIfUnset,
   hasOwner,
@@ -631,12 +630,11 @@ function shutdown(code = 0) {
   process.exit(code);
 }
 
-function isCliEntrypoint() {
-  if (!process.argv[1]) return false;
-  return import.meta.url === pathToFileURL(process.argv[1]).href;
-}
-
-if (isCliEntrypoint()) {
+// Boot the service unless we're being imported by the test runner (vitest sets VITEST=true),
+// which lets tests import exported helpers without starting the bot.
+// NOTE: do NOT gate on argv[1]/import.meta.url — PM2 fork mode sets argv[1] to its own
+// container wrapper, so that check is false under PM2 and the bot would never start.
+if (process.env.VITEST !== 'true') {
   process.once('SIGINT', () => shutdown(0));
   process.once('SIGTERM', () => shutdown(0));
 
