@@ -82,6 +82,18 @@ describe('c4 helpers', () => {
     expect(result).toContain('---- file: /tmp/a&amp;b.png');
   });
 
+  it('formats multiple file trailers while keeping single-path callers working', () => {
+    const result = formatDmMessage({
+      username: 'Felix',
+      text: 'files',
+      filePath: ['/tmp/a&b.png', null, '', '/tmp/c<d>.txt']
+    });
+
+    expect(result).toContain('<current-message>\nfiles\n</current-message>');
+    expect(result).toContain('---- file: /tmp/a&amp;b.png\n---- file: /tmp/c&lt;d&gt;.txt');
+    expect(result).not.toContain('---- file: \n');
+  });
+
   it('formats group messages with escaped context', () => {
     const result = formatGroupMessage({
       channelName: 'team<&>',
@@ -106,6 +118,19 @@ describe('c4 helpers', () => {
     expect(result).toContain('<replying-to message-id="parent1" from-user-id="author1">quoted body</replying-to>');
     expect(result).toContain('&lt;hello&gt;');
     expect(result).toContain('---- file: /tmp/group&lt;file&gt;.txt');
+  });
+
+  it('formats group messages with multiple file trailers', () => {
+    const result = formatGroupMessage({
+      channelName: 'files',
+      username: 'Felix',
+      text: '[sent a file: one.txt] [sent a file: two.txt]',
+      filePath: ['/tmp/one.txt', '/tmp/two.txt']
+    });
+
+    expect(result).toContain('[DISCORD GROUP:files] Felix said:');
+    expect(result).toContain('[sent a file: one.txt] [sent a file: two.txt]');
+    expect(result).toContain('---- file: /tmp/one.txt\n---- file: /tmp/two.txt');
   });
 
   it('formats thread messages with smart-mode hints', () => {
@@ -169,15 +194,43 @@ describe('c4 helpers', () => {
       targetText: '<target>'
     })).toBe('[DISCORD REACTION] A&amp;B added &lt;:ok:1&gt; to "&lt;target&gt;"');
 
-    expect(formatMessageEditEvent({
-      username: 'C<D',
-      oldText: 'old',
-      newText: 'new & improved'
-    })).toBe('[DISCORD EDIT] C&lt;D edited a message from "old" to "new &amp; improved"');
-
     expect(formatMessageDeleteEvent({
       username: 'E>F',
       text: 'gone'
     })).toBe('[DISCORD DELETE] E&gt;F deleted a message: "gone"');
+  });
+
+  it('formats message edits with full current text and no before text', () => {
+    const current = `${'a'.repeat(150)} & more`;
+    const result = formatMessageEditEvent({
+      username: 'C<D',
+      oldText: 'old text should not appear',
+      newText: current
+    });
+
+    expect(result).toBe(`[DISCORD EDIT] C&lt;D edited their message - current text: "${'a'.repeat(150)} &amp; more"`);
+    expect(result).not.toContain('old text');
+  });
+
+  it('preserves message edit whitespace while escaping XML', () => {
+    const result = formatMessageEditEvent({
+      username: 'Felix',
+      newText: 'line 1\n  line 2\n<code>'
+    });
+
+    expect(result).toContain('line 1\n  line 2\n&lt;code&gt;');
+  });
+
+  it('caps message edit current text at 4000 chars, not 120', () => {
+    const longText = 'x'.repeat(5000);
+    const result = formatMessageEditEvent({
+      username: 'Felix',
+      newText: longText
+    });
+    const body = result.match(/current text: "([^"]+)"/)?.[1];
+
+    expect(body).toHaveLength(4000);
+    expect(body.endsWith('...')).toBe(true);
+    expect(body).toContain('x'.repeat(200));
   });
 });

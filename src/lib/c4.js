@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 
 const C4_RECEIVE = path.join(process.env.HOME, 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
 const ENDPOINT_KEYS = new Set(['msg', 'req']);
+const MAX_EDIT_TEXT_LENGTH = 4000;
 
 export function escapeXml(value) {
   return String(value ?? '')
@@ -53,8 +54,16 @@ export function parseEndpoint(endpoint) {
 }
 
 function appendFilePath(content, filePath) {
-  if (!filePath) return content;
-  return `${content}\n---- file: ${escapeXml(filePath)}`;
+  const filePaths = (Array.isArray(filePath) ? filePath : (filePath ? [filePath] : [])).filter(Boolean);
+  if (filePaths.length === 0) return content;
+  const trailers = filePaths.map((onePath) => `---- file: ${escapeXml(onePath)}`);
+  return `${content}\n${trailers.join('\n')}`;
+}
+
+function capTextPreservingWhitespace(text, maxLen) {
+  const input = String(text ?? '');
+  if (input.length <= maxLen) return input;
+  return `${input.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
 export function truncateText(text, maxLen = 100) {
@@ -113,9 +122,8 @@ export function formatReactionEvent({ username, action, emoji, targetText }) {
   return `[DISCORD REACTION] ${escapeXml(username)} ${escapeXml(action)} ${escapeXml(emoji)} to "${escapeXml(truncateText(targetText, 80))}"`;
 }
 
-export function formatMessageEditEvent({ username, oldText = '', newText = '' }) {
-  const oldPart = oldText ? ` from "${escapeXml(truncateText(oldText, 80))}"` : '';
-  return `[DISCORD EDIT] ${escapeXml(username)} edited a message${oldPart} to "${escapeXml(truncateText(newText, 120))}"`;
+export function formatMessageEditEvent({ username, newText = '' }) {
+  return `[DISCORD EDIT] ${escapeXml(username)} edited their message - current text: "${escapeXml(capTextPreservingWhitespace(newText, MAX_EDIT_TEXT_LENGTH))}"`;
 }
 
 export function formatMessageDeleteEvent({ username, text = '' }) {
