@@ -82,6 +82,17 @@ describe('c4 helpers', () => {
     expect(result).toContain('---- file: /tmp/a&amp;b.png');
   });
 
+  it('formats multiple file trailers while keeping single-path callers working', () => {
+    const result = formatDmMessage({
+      username: 'Felix',
+      text: 'files',
+      filePath: ['/tmp/a&b.png', '/tmp/c<d>.txt']
+    });
+
+    expect(result).toContain('<current-message>\nfiles\n</current-message>');
+    expect(result).toContain('---- file: /tmp/a&amp;b.png\n---- file: /tmp/c&lt;d&gt;.txt');
+  });
+
   it('formats group messages with escaped context', () => {
     const result = formatGroupMessage({
       channelName: 'team<&>',
@@ -106,6 +117,19 @@ describe('c4 helpers', () => {
     expect(result).toContain('<replying-to message-id="parent1" from-user-id="author1">quoted body</replying-to>');
     expect(result).toContain('&lt;hello&gt;');
     expect(result).toContain('---- file: /tmp/group&lt;file&gt;.txt');
+  });
+
+  it('formats group messages with multiple file trailers', () => {
+    const result = formatGroupMessage({
+      channelName: 'files',
+      username: 'Felix',
+      text: '[sent a file: one.txt] [sent a file: two.txt]',
+      filePath: ['/tmp/one.txt', '/tmp/two.txt']
+    });
+
+    expect(result).toContain('[DISCORD GROUP:files] Felix said:');
+    expect(result).toContain('[sent a file: one.txt] [sent a file: two.txt]');
+    expect(result).toContain('---- file: /tmp/one.txt\n---- file: /tmp/two.txt');
   });
 
   it('formats thread messages with smart-mode hints', () => {

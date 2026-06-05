@@ -60,6 +60,7 @@ import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib
 import { isVoiceMessageAttachment, resolveVoiceNote } from './lib/voice.js';
 
 const LOG = '[discord]';
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
 let client = null;
 let configWatcherStop = null;
@@ -235,10 +236,6 @@ function attachmentName(attachment) {
   return attachment?.name || 'file';
 }
 
-function moreAttachmentsNote(count) {
-  return count > 1 ? ` [+${count - 1} more attachments]` : '';
-}
-
 function skippedAttachmentNote(result, name = 'file') {
   const reason = result?.reason === 'too_large'
     ? 'too large'
@@ -294,6 +291,35 @@ async function resolveInboundMedia(config, attachment, { download, message = nul
     console.warn(`${LOG} failed to download attachment: ${err.message}`);
     return { filePath: null, note: `[attachment skipped: download failed: ${name}]` };
   }
+}
+
+async function resolveInboundAttachments(config, attachments, { download, message = null, disabledNote = false } = {}) {
+  if (!attachments.length) return { filePaths: [], note: null };
+
+  const processed = attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
+  const skippedCount = Math.max(0, attachments.length - processed.length);
+  const media = [];
+
+  for (const attachment of processed) {
+    if (disabledNote) {
+      media.push({
+        filePath: null,
+        note: `[attachment skipped: media downloads disabled: ${attachmentName(attachment)}]`
+      });
+      continue;
+    }
+    media.push(await resolveInboundMedia(config, attachment, { download, message }));
+  }
+
+  const notes = media.map((entry) => entry.note).filter(Boolean);
+  if (skippedCount > 0) {
+    notes.push(`[+${skippedCount} more attachments not processed]`);
+  }
+
+  return {
+    filePaths: media.map((entry) => entry.filePath).filter(Boolean),
+    note: notes.length ? notes.join(' ') : null
+  };
 }
 
 async function handleReactionEvent(reaction, user, action) {
@@ -384,7 +410,6 @@ async function handleGuildMessage(message) {
   const threadId = resolvePolicyThreadId(message);
   const historyKey = message.channel.id;
   const attachments = getAttachments(message);
-  const firstAttachment = attachments[0];
   const hasAttachment = attachments.length > 0;
   const stickers = getStickers(message);
   const hasSticker = stickers.length > 0;
@@ -434,12 +459,11 @@ async function handleGuildMessage(message) {
     smartNoMention: forwarding.smartNoMention
   });
   const media = hasAttachment && config.features?.downloadMedia === false && forwarding.shouldRespond
-    ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` }
+    ? await resolveInboundAttachments(config, attachments, { disabledNote: true })
     : (hasAttachment
-        ? await resolveInboundMedia(config, firstAttachment, { download: shouldDownloadMedia, message })
-        : { filePath: null, note: null });
-  const countNote = moreAttachmentsNote(attachments.length);
-  const mediaNote = media.note ? `${media.note}${countNote}` : (countNote.trim() || null);
+        ? await resolveInboundAttachments(config, attachments, { download: shouldDownloadMedia, message })
+        : { filePaths: [], note: null });
+  const mediaNote = media.note;
   const stickerNote = stickersNote(stickers);
   const noteText = stickerNote ? appendNote(text, stickerNote) : text;
   const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
@@ -479,7 +503,7 @@ async function handleGuildMessage(message) {
     history,
     isThread,
     smartHint: forwarding.smartNoMention,
-    filePath: media.filePath,
+    filePath: media.filePaths,
     replyingTo
   });
 
@@ -496,7 +520,6 @@ async function handleDirectMessage(message) {
   const username = message.author.username || message.author.globalName || userId;
   const text = message.cleanContent || message.content || '';
   const attachments = getAttachments(message);
-  const firstAttachment = attachments[0];
   const hasAttachment = attachments.length > 0;
   const stickers = getStickers(message);
   const hasSticker = stickers.length > 0;
@@ -551,9 +574,9 @@ async function handleDirectMessage(message) {
   startTyping(message.channel, correlationId);
 
   const media = hasAttachment && config.features?.downloadMedia !== false
-    ? await resolveInboundMedia(config, firstAttachment, { download: true, message })
-    : (hasAttachment ? { filePath: null, note: `[attachment skipped: media downloads disabled: ${attachmentName(firstAttachment)}]` } : { filePath: null, note: null });
-  const mediaNote = media.note ? `${media.note}${moreAttachmentsNote(attachments.length)}` : null;
+    ? await resolveInboundAttachments(config, attachments, { download: true, message })
+    : (hasAttachment ? await resolveInboundAttachments(config, attachments, { disabledNote: true }) : { filePaths: [], note: null });
+  const mediaNote = media.note;
   const stickerNote = stickersNote(stickers);
   const noteText = stickerNote ? appendNote(text, stickerNote) : text;
   const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
@@ -575,7 +598,7 @@ async function handleDirectMessage(message) {
   const replyingTo = await resolveReplyContext(message, {
     warn: (detail) => console.warn(`${LOG} ${detail}`)
   });
-  const content = formatDmMessage({ username, text: historyText, filePath: media.filePath, replyingTo });
+  const content = formatDmMessage({ username, text: historyText, filePath: media.filePaths, replyingTo });
   sendToC4('discord', endpoint, content, async (errMsg) => {
     stopTyping(correlationId);
     await clearReaction(message);

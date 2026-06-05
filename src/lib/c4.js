@@ -53,8 +53,10 @@ export function parseEndpoint(endpoint) {
 }
 
 function appendFilePath(content, filePath) {
-  if (!filePath) return content;
-  return `${content}\n---- file: ${escapeXml(filePath)}`;
+  const filePaths = Array.isArray(filePath) ? filePath : (filePath ? [filePath] : []);
+  if (filePaths.length === 0) return content;
+  const trailers = filePaths.map((onePath) => `---- file: ${escapeXml(onePath)}`);
+  return `${content}\n${trailers.join('\n')}`;
 }
 
 export function truncateText(text, maxLen = 100) {
