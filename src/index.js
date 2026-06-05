@@ -6,6 +6,7 @@
  */
 
 import { Client, Events, GatewayIntentBits, Partials } from 'discord.js';
+import { pathToFileURL } from 'node:url';
 import {
   bindOwnerIfUnset,
   hasOwner,
@@ -66,10 +67,10 @@ let client = null;
 let configWatcherStop = null;
 let shuttingDown = false;
 
-console.log(`${LOG} Starting...`);
-console.log(`${LOG} Data directory: ${DATA_DIR}`);
-
 async function main() {
+  console.log(`${LOG} Starting...`);
+  console.log(`${LOG} Data directory: ${DATA_DIR}`);
+
   const config = getConfig();
   console.log(`${LOG} Config loaded, enabled: ${config.enabled}`);
 
@@ -293,13 +294,19 @@ async function resolveInboundMedia(config, attachment, { download, message = nul
   }
 }
 
-async function resolveInboundAttachments(config, attachments, { download, message = null, disabledNote = false } = {}) {
+export async function resolveInboundAttachments(config, attachments, {
+  download,
+  message = null,
+  disabledNote = false,
+  resolveMedia = resolveInboundMedia
+} = {}) {
   if (!attachments.length) return { filePaths: [], note: null };
 
   const processed = attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
   const skippedCount = Math.max(0, attachments.length - processed.length);
   const media = [];
 
+  // Keep media and voice resolution sequential to avoid concurrent Whisper/download pressure.
   for (const attachment of processed) {
     if (disabledNote) {
       media.push({
@@ -308,7 +315,7 @@ async function resolveInboundAttachments(config, attachments, { download, messag
       });
       continue;
     }
-    media.push(await resolveInboundMedia(config, attachment, { download, message }));
+    media.push(await resolveMedia(config, attachment, { download, message }));
   }
 
   const notes = media.map((entry) => entry.note).filter(Boolean);
@@ -624,10 +631,17 @@ function shutdown(code = 0) {
   process.exit(code);
 }
 
-process.once('SIGINT', () => shutdown(0));
-process.once('SIGTERM', () => shutdown(0));
+function isCliEntrypoint() {
+  if (!process.argv[1]) return false;
+  return import.meta.url === pathToFileURL(process.argv[1]).href;
+}
 
-main().catch((err) => {
-  console.error(`${LOG} Fatal error:`, err);
-  process.exit(1);
-});
+if (isCliEntrypoint()) {
+  process.once('SIGINT', () => shutdown(0));
+  process.once('SIGTERM', () => shutdown(0));
+
+  main().catch((err) => {
+    console.error(`${LOG} Fatal error:`, err);
+    process.exit(1);
+  });
+}

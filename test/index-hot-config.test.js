@@ -72,7 +72,8 @@ describe('index hot-path config use', () => {
     expect(resolver).toContain('attachments.slice(0, MAX_ATTACHMENTS_PER_MESSAGE)');
     expect(resolver).toContain('more attachments not processed');
     expect(resolver).toContain('for (const attachment of processed)');
-    expect(resolver).toContain('resolveInboundMedia(config, attachment');
+    expect(source).toContain('resolveMedia = resolveInboundMedia');
+    expect(resolver).toContain('resolveMedia(config, attachment');
 
     for (const handler of ['handleGuildMessage', 'handleDirectMessage']) {
       const body = functionBody(source, handler);
