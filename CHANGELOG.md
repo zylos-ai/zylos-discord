@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-05
+
+### Added
+- Multi-attachment inbound: forward up to 10 attachments per message, each with
+  its own `---- file:` trailer and per-file voice-note transcription; a visible
+  non-silent note is emitted when more than 10 attachments are sent.
+
+### Changed
+- Message edits now deliver the full edited text (original whitespace preserved,
+  capped at 4000 characters) so the agent can read and respond to the edit,
+  rather than a short whitespace-normalized preview.
+
+### Fixed
+- Service now boots correctly under PM2: the bootstrap is gated on the test-runner
+  environment instead of `argv[1]`, which PM2 fork mode overrides with its own
+  container wrapper (previously the bot could remain "online" without ever
+  connecting to the gateway).
+
 ## [0.1.0] - 2026-06-04
 
 ### Added
