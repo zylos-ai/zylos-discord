@@ -18,8 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Outbound DM policy: `send.js` looks up the destination channel and sends to a
   DM only if the recipient passes the inbound DM policy (owner always; then
   `dmPolicy` / `dmAllowFrom`). Blocked sends exit 1 with `outbound blocked` and
-  send, upload and record nothing. Guild channels are not restricted. If the
-  lookup fails, a `dm:1` endpoint is blocked and other endpoints send as before.
+  send, upload and record nothing. Guild channels (threads use their parent)
+  must pass the inbound channel policy; an unlisted channel only accepts a
+  reply to a message the owner wrote. If the lookup fails, only a channel
+  listed in config is allowed.
 
 ### Changed
 - c4-receive rejections follow `error.persisted`: already stored -> no reply and

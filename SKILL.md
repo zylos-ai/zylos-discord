@@ -115,8 +115,10 @@ node ~/zylos/.claude/skills/discord/scripts/session-group.js "<endpoint>"
   the agent never auto-approves access.
 - **Outbound DMs:** replies and proactive messages to a DM are sent only if the
   recipient would be accepted inbound (owner, or allowed by `dmPolicy` /
-  `dmAllowFrom`); otherwise `send.js` exits 1 with `outbound blocked`. Server
-  channels are not restricted on outbound.
+  `dmAllowFrom`); otherwise `send.js` exits 1 with `outbound blocked`.
+- **Outbound channels:** server channels (threads use their parent) must be
+  allowed by `groupPolicy` / the channel allowlist; an unlisted channel only
+  accepts a reply to a message the owner wrote.
 - **DM pairing commands:** use `dm-pending`, `dm-approve <userId>`, and
   `dm-deny <userId> [reason]` in the admin CLI to review queued DM requests.
 - **Guild access:** the owner may use server channels even when `groupPolicy`

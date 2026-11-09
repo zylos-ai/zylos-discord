@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ChannelType, Routes } from 'discord.js';
-import { isDmAuthorized } from '../src/lib/auth.js';
+import { isChannelAllowed, isDmAuthorized, isOwner } from '../src/lib/auth.js';
 import { getBotToken, getConfig } from '../src/lib/config.js';
 import { parseEndpoint } from '../src/lib/c4.js';
 import { markTypingDone, safeCorrelationId, THINKING_REACTION } from '../src/lib/reactions.js';
@@ -297,28 +297,66 @@ async function getDestinationChannel() {
 }
 
 /**
- * Outbound DM policy: a DM may only go to a user the inbound DM policy would
- * accept (owner always; then dmPolicy / dmAllowFrom). Guild channels are not
- * restricted here. The channel type comes from Discord, not from the
- * endpoint's dm:1 marker; if the lookup fails, an endpoint marked dm:1 is
- * denied and any other endpoint is sent as before.
+ * Outbound destination policy, decided from the channel Discord reports (not
+ * the endpoint's dm:1 marker):
+ * - DM: the recipient must pass the inbound DM policy (owner always; then
+ *   dmPolicy / dmAllowFrom). Group DMs are refused.
+ * - Guild channel (threads and forum posts use their parent): allowed when the
+ *   channel passes the inbound channel policy; otherwise only a reply to a
+ *   message the owner wrote, so owner conversations in unlisted channels work.
+ * If the channel lookup fails, only a channel listed in config is allowed.
  * @returns {string|null} denial reason, or null when allowed
  */
-export function outboundDenialReason(channel, { config, dmMarked = false }) {
-  if (!channel) return dmMarked ? 'cannot verify DM recipient (channel lookup failed)' : null;
-  if (channel.type === ChannelType.GroupDM) return 'group DMs are not allowed';
-  if (channel.type !== ChannelType.DM) return null;
-  const recipientId = channel.recipients?.[0]?.id;
-  if (!recipientId) return 'cannot verify DM recipient';
-  if (!isDmAuthorized(config, recipientId)) {
-    return `DM recipient ${recipientId} is not allowed by dmPolicy=${config.dmPolicy}`;
+export function outboundDenialReason(channel, { config, channelId, replyAuthorId = null }) {
+  if (!channel) {
+    return isChannelAllowed(config, channelId) && config.groupPolicy !== 'open'
+      ? null
+      : 'cannot verify destination (channel lookup failed)';
   }
-  return null;
+  if (channel.type === ChannelType.GroupDM) return 'group DMs are not allowed';
+  if (channel.type === ChannelType.DM) {
+    const recipientId = channel.recipients?.[0]?.id;
+    if (!recipientId) return 'cannot verify DM recipient';
+    if (!isDmAuthorized(config, recipientId)) {
+      return `DM recipient ${recipientId} is not allowed by dmPolicy=${config.dmPolicy}`;
+    }
+    return null;
+  }
+  const policyChannelId = THREAD_TYPES.has(channel.type) ? (channel.parent_id || channel.id) : channel.id;
+  if (isChannelAllowed(config, policyChannelId)) return null;
+  if (replyAuthorId && isOwner(config, replyAuthorId)) return null;
+  return `channel ${policyChannelId} is not allowed (groupPolicy=${config.groupPolicy}) and the reply target is not an owner message`;
+}
+
+const THREAD_TYPES = new Set([
+  ChannelType.AnnouncementThread,
+  ChannelType.PublicThread,
+  ChannelType.PrivateThread
+]);
+
+async function fetchMessageAuthorId(channelId, messageId) {
+  try {
+    const res = await discordRequest(channelUrl(channelId, `/messages/${encodeURIComponent(messageId)}`), {
+      method: 'GET',
+      headers: { Authorization: `Bot ${getResolvedBotToken()}` }
+    });
+    if (!res.ok) return null;
+    return (await res.json())?.author?.id || null;
+  } catch {
+    return null;
+  }
 }
 
 async function assertOutboundAllowed() {
+  const config = getConfig();
   const channel = await getDestinationChannel();
-  const reason = outboundDenialReason(channel, { config: getConfig(), dmMarked: endpoint.dm === '1' });
+  const opts = { config, channelId: endpoint.channelId };
+  let reason = outboundDenialReason(channel, opts);
+  // Unlisted guild channel: allow only a reply to an owner-written message.
+  if (reason && channel && endpoint.msg && channel.type !== ChannelType.DM && channel.type !== ChannelType.GroupDM) {
+    const replyAuthorId = await fetchMessageAuthorId(endpoint.channelId, endpoint.msg);
+    reason = outboundDenialReason(channel, { ...opts, replyAuthorId });
+  }
   if (reason) throw new Error(`outbound blocked: ${reason}`);
 }
 
