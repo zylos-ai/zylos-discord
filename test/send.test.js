@@ -41,7 +41,7 @@ function runSend(args, { input = null, env = {} } = {}) {
   });
 }
 
-function makeHome({ port, textMode = 'markdown' }) {
+function makeHome({ port, textMode = 'markdown', policy = {} }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-send-'));
   const dataDir = path.join(home, 'zylos/components/discord');
   fs.mkdirSync(dataDir, { recursive: true });
@@ -49,7 +49,8 @@ function makeHome({ port, textMode = 'markdown' }) {
     enabled: true,
     botToken: 'secret',
     internalPort: port,
-    textMode
+    textMode,
+    ...policy
   }));
   return home;
 }
@@ -67,7 +68,7 @@ function parseRequestBody(req, bodyText) {
   return JSON.parse(bodyText);
 }
 
-async function withFakeServers(fn, { channelTypes = {}, failChannelGets = [] } = {}) {
+async function withFakeServers(fn, { channelTypes = {}, channelRecipients = {}, failChannelGets = [] } = {}) {
   const requests = [];
   const failingGets = new Set(failChannelGets);
   let messageSeq = 0;
@@ -93,7 +94,9 @@ async function withFakeServers(fn, { channelTypes = {}, failChannelGets = [] } =
           return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ id: channelId, type: channelTypes[channelId] ?? 0 }));
+        const channel = { id: channelId, type: channelTypes[channelId] ?? 0 };
+        if (channelRecipients[channelId]) channel.recipients = [{ id: channelRecipients[channelId] }];
+        res.end(JSON.stringify(channel));
         return;
       }
 
@@ -438,7 +441,8 @@ multiselect: yes`)).toEqual({
       });
 
       expect(result.code).toBe(0);
-      expect(requests.some((req) => req.method === 'GET' && req.url === '/channels/thread1')).toBe(false);
+      // One channel lookup for the outbound DM check, none for forum detection.
+      expect(requests.filter((req) => req.method === 'GET' && req.url === '/channels/thread1')).toHaveLength(1);
       expect(requests.some((req) => req.url === '/channels/thread1/threads')).toBe(false);
       expect(requests.find((req) => req.url === '/channels/thread1/messages')?.body).toEqual({
         content: 'reply body',
@@ -620,5 +624,82 @@ Release now?
       expect(result.code).toBe(0);
       expect(requests.find((req) => req.url === '/channels/chan1/messages')?.body.content).toBe('\\*\\*bold\\*\\* \\_x\\_');
     });
+  });
+});
+
+describe('outbound DM policy', () => {
+  const dmCases = [
+    ['owner', { owner: 'u-owner', dmPolicy: 'owner' }, 'u-owner', true],
+    ['owner with miscased dmPolicy', { owner: 'u-owner', dmPolicy: 'Owner' }, 'u-owner', true],
+    ['stranger under owner policy', { owner: 'u-owner', dmPolicy: 'owner' }, 'u-x', false],
+    ['allowlisted user', { owner: 'u-owner', dmPolicy: 'allowlist', dmAllowFrom: ['u-a'] }, 'u-a', true],
+    ['unlisted user under allowlist', { owner: 'u-owner', dmPolicy: 'allowlist', dmAllowFrom: ['u-a'] }, 'u-x', false],
+    ['unapproved user under pairing', { owner: 'u-owner', dmPolicy: 'pairing', dmAllowFrom: [] }, 'u-x', false],
+    ['anyone under open', { owner: 'u-owner', dmPolicy: 'open' }, 'u-x', true]
+  ];
+
+  for (const [name, policy, recipient, allowed] of dmCases) {
+    it(`${allowed ? 'sends' : 'blocks'} DM to ${name}`, async () => {
+      await withFakeServers(async ({ port, requests }) => {
+        const home = makeHome({ port, policy });
+        const result = await runSend(['dm1', 'hello'], {
+          env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+        });
+        const posted = requests.some((req) => req.method === 'POST' && req.url === '/channels/dm1/messages');
+        expect(posted).toBe(allowed);
+        expect(result.code).toBe(allowed ? 0 : 1);
+        if (!allowed) {
+          expect(result.stderr).toContain('outbound blocked');
+          expect(requests.some((req) => req.url === '/internal/record-outgoing')).toBe(false);
+        }
+      }, { channelTypes: { dm1: 1 }, channelRecipients: { dm1: recipient } });
+    });
+  }
+
+  it('blocks media to a disallowed DM before uploading', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, policy: { owner: 'u-owner', dmPolicy: 'owner' } });
+      const file = path.join(home, 'a.txt');
+      fs.writeFileSync(file, 'x');
+      const result = await runSend(['dm1', `[MEDIA:file]${file}`], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      expect(result.code).toBe(1);
+      expect(requests.some((req) => req.method === 'POST' && req.url?.startsWith('/channels/dm1'))).toBe(false);
+    }, { channelTypes: { dm1: 1 }, channelRecipients: { dm1: 'u-x' } });
+  });
+
+  it('does not restrict guild channels outside the allowlist', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, policy: { owner: 'u-owner', dmPolicy: 'owner', groupPolicy: 'allowlist', channels: {} } });
+      const result = await runSend(['chan9', 'hello'], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      expect(result.code).toBe(0);
+      expect(requests.some((req) => req.method === 'POST' && req.url === '/channels/chan9/messages')).toBe(true);
+    });
+  });
+
+  it('blocks a dm:1 endpoint when the channel lookup fails', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, policy: { owner: 'u-owner', dmPolicy: 'open' } });
+      const result = await runSend(['dm1|msg:m1|dm:1', 'hello'], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('cannot verify DM recipient');
+      expect(requests.some((req) => req.method === 'POST' && req.url === '/channels/dm1/messages')).toBe(false);
+    }, { failChannelGets: ['dm1'] });
+  });
+
+  it('still sends to a guild endpoint when the channel lookup fails', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port });
+      const result = await runSend(['chan1', 'hello'], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      expect(result.code).toBe(0);
+      expect(requests.some((req) => req.method === 'POST' && req.url === '/channels/chan1/messages')).toBe(true);
+    }, { failChannelGets: ['chan1'] });
   });
 });

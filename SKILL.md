@@ -113,6 +113,10 @@ node ~/zylos/.claude/skills/discord/scripts/session-group.js "<endpoint>"
 - **DM access:** `dmPolicy` can be `open`, `allowlist`, `owner`, or
   `pairing`. Under `pairing`, unknown DM senders are queued for owner review;
   the agent never auto-approves access.
+- **Outbound DMs:** replies and proactive messages to a DM are sent only if the
+  recipient would be accepted inbound (owner, or allowed by `dmPolicy` /
+  `dmAllowFrom`); otherwise `send.js` exits 1 with `outbound blocked`. Server
+  channels are not restricted on outbound.
 - **DM pairing commands:** use `dm-pending`, `dm-approve <userId>`, and
   `dm-deny <userId> [reason]` in the admin CLI to review queued DM requests.
 - **Guild access:** the owner may use server channels even when `groupPolicy`

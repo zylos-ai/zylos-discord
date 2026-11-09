@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Core lists it in `c4-receive-options.json`, so older Cores see unchanged args.
 - `scripts/session-group.js <endpoint>` prints the group for an endpoint (used by
   the scheduler to file tasks in the right group).
+- Outbound DM policy: `send.js` looks up the destination channel and sends to a
+  DM only if the recipient passes the inbound DM policy (owner always; then
+  `dmPolicy` / `dmAllowFrom`). Blocked sends exit 1 with `outbound blocked` and
+  send, upload and record nothing. Guild channels are not restricted. If the
+  lookup fails, a `dm:1` endpoint is blocked and other endpoints send as before.
 
 ### Changed
 - c4-receive rejections follow `error.persisted`: already stored -> no reply and

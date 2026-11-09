@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ChannelType, Routes } from 'discord.js';
+import { isDmAuthorized } from '../src/lib/auth.js';
 import { getBotToken, getConfig } from '../src/lib/config.js';
 import { parseEndpoint } from '../src/lib/c4.js';
 import { markTypingDone, safeCorrelationId, THINKING_REACTION } from '../src/lib/reactions.js';
@@ -49,6 +50,7 @@ if (IS_DIRECT && endpoint.req && !correlationId) {
 
 let cachedBotToken = null;
 let cachedSendTarget = null;
+let cachedChannel; // undefined = not fetched, null = lookup failed
 
 function getResolvedBotToken() {
   if (cachedBotToken === null) {
@@ -283,6 +285,43 @@ function forumThreadReceipt(thread) {
   };
 }
 
+async function getDestinationChannel() {
+  if (cachedChannel === undefined) {
+    try {
+      cachedChannel = await fetchChannel(endpoint.channelId);
+    } catch {
+      cachedChannel = null;
+    }
+  }
+  return cachedChannel;
+}
+
+/**
+ * Outbound DM policy: a DM may only go to a user the inbound DM policy would
+ * accept (owner always; then dmPolicy / dmAllowFrom). Guild channels are not
+ * restricted here. The channel type comes from Discord, not from the
+ * endpoint's dm:1 marker; if the lookup fails, an endpoint marked dm:1 is
+ * denied and any other endpoint is sent as before.
+ * @returns {string|null} denial reason, or null when allowed
+ */
+export function outboundDenialReason(channel, { config, dmMarked = false }) {
+  if (!channel) return dmMarked ? 'cannot verify DM recipient (channel lookup failed)' : null;
+  if (channel.type === ChannelType.GroupDM) return 'group DMs are not allowed';
+  if (channel.type !== ChannelType.DM) return null;
+  const recipientId = channel.recipients?.[0]?.id;
+  if (!recipientId) return 'cannot verify DM recipient';
+  if (!isDmAuthorized(config, recipientId)) {
+    return `DM recipient ${recipientId} is not allowed by dmPolicy=${config.dmPolicy}`;
+  }
+  return null;
+}
+
+async function assertOutboundAllowed() {
+  const channel = await getDestinationChannel();
+  const reason = outboundDenialReason(channel, { config: getConfig(), dmMarked: endpoint.dm === '1' });
+  if (reason) throw new Error(`outbound blocked: ${reason}`);
+}
+
 async function resolveSendTarget() {
   if (cachedSendTarget) return cachedSendTarget;
   if (endpoint.msg) {
@@ -290,13 +329,7 @@ async function resolveSendTarget() {
     return cachedSendTarget;
   }
 
-  let channel = null;
-  try {
-    channel = await fetchChannel(endpoint.channelId);
-  } catch {
-    cachedSendTarget = { channelId: endpoint.channelId, forumRoot: false };
-    return cachedSendTarget;
-  }
+  const channel = await getDestinationChannel();
   cachedSendTarget = {
     channelId: endpoint.channelId,
     forumRoot: isForumRootChannel(channel)
@@ -626,6 +659,8 @@ async function main() {
       console.log('Skipped');
       return;
     }
+
+    await assertOutboundAllowed();
 
     const media = parseMediaMessage(message);
     if (message.startsWith('[MEDIA:') && !media) {

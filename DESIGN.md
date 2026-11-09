@@ -108,6 +108,10 @@ and can use owner approval through DM pairing.
   permissions.
 - DM access is controlled by `dmPolicy`; server-channel access is controlled by
   `groupPolicy`, per-channel `allowFrom`, and owner bypass rules.
+- Outbound DMs follow the same DM policy: `send.js` resolves the channel via the
+  Discord API (not the `dm:1` marker) and blocks DMs to recipients the inbound
+  policy would reject. Guild channels are not restricted on outbound, so owner
+  conversations in unlisted channels keep working.
 - Unknown DM senders under `dmPolicy:"pairing"` are queued for owner approval;
   the agent never auto-approves access.
 - Discord mentions from outbound messages are disabled with
