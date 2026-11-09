@@ -48,7 +48,7 @@ export function classifyC4Rejection(response) {
   if (!Array.isArray(persisted)) return 'uncertain';
   return persisted.length > 0 ? 'committed' : 'not_stored';
 }
-const ENDPOINT_KEYS = new Set(['msg', 'req']);
+const ENDPOINT_KEYS = new Set(['msg', 'req', 'dm']);
 const MAX_EDIT_TEXT_LENGTH = 4000;
 
 export function escapeXml(value) {
@@ -60,10 +60,16 @@ export function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
-export function buildEndpoint(channelId, { messageId, correlationId } = {}) {
+/**
+ * Build the C4 reply endpoint. `dm: true` adds `dm:1` so session grouping can
+ * tell a DM channel from a guild channel without stored state; send.js ignores
+ * the key (it only routes by channel id and msg).
+ */
+export function buildEndpoint(channelId, { messageId, correlationId, dm = false } = {}) {
   const endpoint = [String(channelId)];
   if (messageId) endpoint.push(`msg:${messageId}`);
   endpoint.push(`req:${correlationId || `${channelId}:${messageId || ''}`}`);
+  if (dm) endpoint.push('dm:1');
   return endpoint.join('|');
 }
 
@@ -74,18 +80,19 @@ export function normalizeCorrelationPart(value) {
     .slice(0, 80) || 'event';
 }
 
-export function buildEventEndpoint(channelId, { messageId, kind, nonce = crypto.randomUUID(), now = Date.now() } = {}) {
+export function buildEventEndpoint(channelId, { messageId, kind, dm = false, nonce = crypto.randomUUID(), now = Date.now() } = {}) {
   const normalizedKind = normalizeCorrelationPart(kind);
   const normalizedNonce = normalizeCorrelationPart(nonce);
   return buildEndpoint(channelId, {
     messageId,
+    dm,
     correlationId: `${channelId}:${messageId || ''}:${normalizedKind}:${now}:${normalizedNonce}`
   });
 }
 
 export function parseEndpoint(endpoint) {
   const [channelId, ...parts] = String(endpoint || '').split('|');
-  const result = { channelId, msg: null, req: null };
+  const result = { channelId, msg: null, req: null, dm: null };
 
   for (const part of parts) {
     const colonIdx = part.indexOf(':');

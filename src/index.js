@@ -256,7 +256,7 @@ function eventEndpoint(message, kind) {
   const channelId = message?.channel?.id;
   const messageId = message?.id;
   if (!channelId || !messageId) return null;
-  return buildEventEndpoint(channelId, { messageId, kind });
+  return buildEventEndpoint(channelId, { messageId, kind, dm: !message.guild });
 }
 
 function sendDiscordEvent(message, kind, content) {
@@ -586,7 +586,7 @@ async function handleDirectMessage(message) {
   const noteText = stickerNote ? appendNote(text, stickerNote) : text;
   const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
 
-  const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId });
+  const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId, dm: true });
 
   try {
     recordIncoming({

@@ -81,13 +81,15 @@ sending side.
 
 | Conversation | Session group | Example |
 |---|---|---|
-| DM, guild text channel, thread or forum post | `channel-<channel id>` | `channel-1234567890123456789` |
+| DM | `dm-<DM channel id>` | `dm-1234567890123456789` |
+| Guild text channel, thread or forum post | `channel-<channel id>` | `channel-987654321098765432` |
 | Owner admin notices (DM pairing requests) | `admin` | `admin` |
 
 - Discord threads and forum posts are channels with their own id, so each one is
   its own group. Reply chains inside a channel stay in the channel's group.
-- The endpoint carries only the channel id, so DMs and guild channels share one
-  rule; the per-message `msg:` / `req:` parts never take part.
+- DM endpoints carry a `dm:1` marker set when the message arrives, so the
+  lookup needs no stored state; the per-message `msg:` / `req:` parts never
+  take part. Replies ignore the marker.
 - The group is passed only if the installed Core lists `--session-group` in
   `c4-receive-options.json`; older Cores behave exactly as before.
 - If Core rejects a message, Core's raw text goes only to the component log. The

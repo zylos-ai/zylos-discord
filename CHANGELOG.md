@@ -8,9 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2026-11-09
 
 ### Added
-- Session groups for multi-session zylos-core: every Discord channel (DM, guild
-  channel, thread, forum post) is its own group `channel-<channel id>`; owner
-  admin notices use `admin`. `--session-group` is passed only when the installed
+- Session groups for multi-session zylos-core: DMs are `dm-<channel id>`, guild
+  channels, threads and forum posts `channel-<channel id>`, owner admin notices
+  `admin`. DM endpoints (messages and reaction/edit/delete events) carry a
+  `dm:1` marker so the lookup needs no stored state. `--session-group` is passed only when the installed
   Core lists it in `c4-receive-options.json`, so older Cores see unchanged args.
 - `scripts/session-group.js <endpoint>` prints the group for an endpoint (used by
   the scheduler to file tasks in the right group).

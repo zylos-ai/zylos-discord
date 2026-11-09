@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { sessionGroupFromEndpoint } from '../src/lib/session-group.js';
+import { sessionGroupFromEndpoint, isValidSessionGroup } from '../src/lib/session-group.js';
 import {
   buildC4ReceiveArgs,
   buildEndpoint,
@@ -18,7 +18,8 @@ const GROUP_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 
 describe('sessionGroupFromEndpoint', () => {
   const cases = [
-    ['DM channel', buildEndpoint('1234567890123456789', { messageId: '42', correlationId: 'c1' }), 'channel-1234567890123456789'],
+    ['DM channel', buildEndpoint('1234567890123456789', { messageId: '42', correlationId: 'c1', dm: true }), 'dm-1234567890123456789'],
+    ['DM event endpoint', buildEventEndpoint('1234567890123456789', { messageId: '9', kind: 'edit', dm: true, nonce: 'n', now: 1 }), 'dm-1234567890123456789'],
     ['guild channel', '987654321098765432|msg:1|req:x', 'channel-987654321098765432'],
     ['thread (own channel id)', '1122334455667788990|msg:7|req:y', 'channel-1122334455667788990'],
     ['event endpoint', buildEventEndpoint('555', { messageId: '9', kind: 'reaction', nonce: 'n', now: 1 }), 'channel-555'],
@@ -31,11 +32,27 @@ describe('sessionGroupFromEndpoint', () => {
       expect(got).toBe(group);
       expect(got.length).toBeLessThanOrEqual(95);
       expect(got).toMatch(GROUP_NAME);
+      expect(isValidSessionGroup(got)).toBe(true);
     });
   }
 
+  it('isValidSessionGroup follows the Core contract', () => {
+    expect(isValidSessionGroup('a'.repeat(95))).toBe(true);
+    expect(isValidSessionGroup('a'.repeat(96))).toBe(false);
+    for (const bad of ['', '-x', '_x', 'a b', 'a/b', null, undefined]) expect(isValidSessionGroup(bad)).toBe(false);
+  });
+
   it('ignores per-message parts', () => {
     expect(sessionGroupFromEndpoint('555|msg:1|req:a')).toBe(sessionGroupFromEndpoint('555|msg:2|req:b'));
+  });
+
+  it('dm marker is the only DM signal', () => {
+    expect(sessionGroupFromEndpoint('555|msg:1|req:a|dm:1')).toBe('dm-555');
+    expect(sessionGroupFromEndpoint('555|msg:1|req:a')).toBe('channel-555');
+  });
+
+  it('rejects a malformed dm marker', () => {
+    expect(() => sessionGroupFromEndpoint('555|msg:1|dm:yes')).toThrow(/invalid dm marker/);
   });
 
   for (const bad of ['', '|msg:1', 'abc|msg:1', '0123|msg:1', '-55|msg:1', '1'.repeat(26), null, undefined]) {
