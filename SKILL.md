@@ -1,6 +1,6 @@
 ---
 name: discord
-version: 0.1.1
+version: 0.2.0
 description: >
   Discord bot channel for Zylos agents. Use when the user wants to communicate
   via Discord — chat with the agent in Discord DMs or server channels, send or
@@ -71,6 +71,39 @@ cat message.txt | node ~/zylos/.claude/skills/discord/scripts/send.js "<endpoint
 
 - **Connection:** Gateway WebSocket (discord.js v14). No webhook / Caddy route.
 - **Setup:** bot token + enable Message Content Intent + invite the bot to a server.
+
+## Session Groups (multi-session Core)
+
+With a zylos-core that supports multi-session, each inbound message carries a
+session group, so every Discord channel gets its own conversation thread.
+Replies still go through the same `reply via` path; nothing changes on the
+sending side.
+
+| Conversation | Session group | Example |
+|---|---|---|
+| DM, guild text channel, thread or forum post | `channel-<channel id>` | `channel-1234567890123456789` |
+| Owner admin notices (DM pairing requests) | `admin` | `admin` |
+
+- Discord threads and forum posts are channels with their own id, so each one is
+  its own group. Reply chains inside a channel stay in the channel's group.
+- The endpoint carries only the channel id, so DMs and guild channels share one
+  rule; the per-message `msg:` / `req:` parts never take part.
+- The group is passed only if the installed Core lists `--session-group` in
+  `c4-receive-options.json`; older Cores behave exactly as before.
+- If Core rejects a message, Core's raw text goes only to the component log. The
+  user gets "please try again later" when Core says nothing was stored, and
+  "this message may not have reached me; resend if there is no reply in a few
+  minutes" when Core cannot say (or c4-receive fails twice). A rejected group is
+  never dropped and resent to the overall group. If Core reports the message as
+  already stored, the component sends nothing, does not resend, and clears the
+  typing indicator and reaction.
+
+Look up the group for a reply endpoint (prints the in-group name; exits 1 on an
+invalid endpoint):
+
+```bash
+node ~/zylos/.claude/skills/discord/scripts/session-group.js "<endpoint>"
+```
 
 ## Access Control
 

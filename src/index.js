@@ -214,8 +214,8 @@ async function notifyOwnerDmPairingRequest({ userId, name, firstMessage }) {
     console.warn(`${LOG} failed to notify owner about DM pairing request: ${err.message}`);
   }
 
-  sendToC4('discord', 'admin|type:dm-pairing', notification, (errMsg) => {
-    console.warn(`${LOG} C4 rejected DM pairing admin notice: ${errMsg}`);
+  sendToC4('discord', 'admin|type:dm-pairing', notification, (notice) => {
+    if (notice) console.warn(`${LOG} C4 did not take the DM pairing admin notice`);
   });
 }
 
@@ -262,8 +262,8 @@ function eventEndpoint(message, kind) {
 function sendDiscordEvent(message, kind, content) {
   const endpoint = eventEndpoint(message, kind);
   if (!endpoint) return false;
-  sendToC4('discord', endpoint, content, (errMsg) => {
-    console.warn(`${LOG} C4 rejected ${kind} event: ${errMsg}`);
+  sendToC4('discord', endpoint, content, (notice) => {
+    if (notice) console.warn(`${LOG} C4 did not take the ${kind} event`);
   });
   return true;
 }
@@ -512,10 +512,10 @@ async function handleGuildMessage(message) {
     replyingTo
   });
 
-  sendToC4('discord', endpoint, content, async (errMsg) => {
+  sendToC4('discord', endpoint, content, async (notice) => {
     stopTyping(correlationId);
     await clearReaction(message);
-    await message.reply(errMsg).catch(() => {});
+    if (notice) await message.reply(notice).catch(() => {});
   });
 }
 
@@ -604,10 +604,10 @@ async function handleDirectMessage(message) {
     warn: (detail) => console.warn(`${LOG} ${detail}`)
   });
   const content = formatDmMessage({ username, text: historyText, filePath: media.filePaths, replyingTo });
-  sendToC4('discord', endpoint, content, async (errMsg) => {
+  sendToC4('discord', endpoint, content, async (notice) => {
     stopTyping(correlationId);
     await clearReaction(message);
-    await message.reply(errMsg).catch(() => {});
+    if (notice) await message.reply(notice).catch(() => {});
   });
 }
 

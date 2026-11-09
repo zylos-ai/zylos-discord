@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-09
+
+### Added
+- Session groups for multi-session zylos-core: every Discord channel (DM, guild
+  channel, thread, forum post) is its own group `channel-<channel id>`; owner
+  admin notices use `admin`. `--session-group` is passed only when the installed
+  Core lists it in `c4-receive-options.json`, so older Cores see unchanged args.
+- `scripts/session-group.js <endpoint>` prints the group for an endpoint (used by
+  the scheduler to file tasks in the right group).
+
+### Changed
+- c4-receive rejections follow `error.persisted`: already stored -> no reply and
+  no resend; not stored -> "please try again later"; unknown -> "may not have
+  reached me". Core's error text is logged only, never sent to Discord users.
+- No component-side timeout kills c4-receive any more (a kill after Core stored
+  the row followed by a retry would deliver the message twice).
+
 ## [0.1.1] - 2026-06-05
 
 ### Added
