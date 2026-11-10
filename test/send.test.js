@@ -739,10 +739,10 @@ describe('outbound guild channel policy', () => {
     expect(posted).toBe(false);
   });
 
-  it('allows owner replies but blocks proactive sends when groupPolicy is disabled', async () => {
+  it('blocks every guild send, owner replies included, when groupPolicy is disabled', async () => {
     const disabled = { ...allowlist, groupPolicy: 'disabled' };
     expect((await sendTo('chanA', disabled)).posted).toBe(false);
-    expect((await sendTo('chanA|msg:m1', disabled, { messageAuthors: { m1: 'u-owner' } })).posted).toBe(true);
+    expect((await sendTo('chanA|msg:m1', disabled, { messageAuthors: { m1: 'u-owner' } })).posted).toBe(false);
   });
 
   it('on lookup failure sends only to a channel listed in config', async () => {

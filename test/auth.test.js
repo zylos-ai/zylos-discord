@@ -124,7 +124,7 @@ describe('auth', () => {
     });
   });
 
-  it('lets the owner bypass disabled guild policy without opening it to non-owners', () => {
+  it('rejects everyone, the owner included, when guild policy is disabled', () => {
     const config = {
       owner: 'owner1',
       groupPolicy: 'disabled',
@@ -133,18 +133,14 @@ describe('auth', () => {
       }
     };
 
-    expect(resolveGuildAccess(config, 'guild1', 'owner1')).toMatchObject({
-      ok: true,
-      owner: true,
-      allowed: false,
-      smart: false
-    });
-    expect(resolveGuildAccess(config, 'guild1', 'user1')).toMatchObject({
-      ok: false,
-      owner: false,
-      allowed: false,
-      smart: false
-    });
+    expect(resolveGuildAccess(config, 'guild1', 'owner1')).toMatchObject({ ok: false, owner: true });
+    expect(resolveGuildAccess(config, 'guild1', 'user1')).toMatchObject({ ok: false, owner: false });
+  });
+
+  it('still lets the owner use a non-allowlisted channel when guild policy is allowlist', () => {
+    const config = { owner: 'owner1', groupPolicy: 'allowlist', channels: {} };
+    expect(resolveGuildAccess(config, 'other', 'owner1')).toMatchObject({ ok: true, owner: true });
+    expect(resolveGuildAccess(config, 'other', 'user1')).toMatchObject({ ok: false });
   });
 
   it('preserves allowlist, smart, and sender gates for non-owners', () => {

@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listed in config is allowed.
 
 ### Changed
+- `groupPolicy: disabled` now rejects the owner too, inbound and outbound, and
+  no longer auto-registers channels (aligned with Telegram). The owner can still
+  use non-allowlisted channels when the policy is `allowlist`.
 - c4-receive rejections follow `error.persisted`: already stored -> no reply and
   no resend; not stored -> "please try again later"; unknown -> "may not have
   reached me". Core's error text is logged only, never sent to Discord users.

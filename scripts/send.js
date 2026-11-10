@@ -304,6 +304,7 @@ async function getDestinationChannel() {
  * - Guild channel (threads and forum posts use their parent): allowed when the
  *   channel passes the inbound channel policy; otherwise only a reply to a
  *   message the owner wrote, so owner conversations in unlisted channels work.
+ *   groupPolicy=disabled blocks every guild send, owner replies included.
  * If the channel lookup fails, only a channel listed in config is allowed.
  * @returns {string|null} denial reason, or null when allowed
  */
@@ -324,6 +325,7 @@ export function outboundDenialReason(channel, { config, channelId, replyAuthorId
   }
   const policyChannelId = THREAD_TYPES.has(channel.type) ? (channel.parent_id || channel.id) : channel.id;
   if (isChannelAllowed(config, policyChannelId)) return null;
+  if (config.groupPolicy === 'disabled') return 'groupPolicy=disabled';
   if (replyAuthorId && isOwner(config, replyAuthorId)) return null;
   return `channel ${policyChannelId} is not allowed (groupPolicy=${config.groupPolicy}) and the reply target is not an owner message`;
 }

@@ -121,9 +121,10 @@ node ~/zylos/.claude/skills/discord/scripts/session-group.js "<endpoint>"
   accepts a reply to a message the owner wrote.
 - **DM pairing commands:** use `dm-pending`, `dm-approve <userId>`, and
   `dm-deny <userId> [reason]` in the admin CLI to review queued DM requests.
-- **Guild access:** the owner may use server channels even when `groupPolicy`
-  is `disabled`; non-owner server access still follows configured channel and
-  sender policy.
+- **Guild access:** the owner may use server channels that are not on the
+  allowlist; `groupPolicy: disabled` rejects everyone, the owner included (same
+  as Telegram). Non-owner server access follows configured channel and sender
+  policy.
 - **Server channel defaults:** adding a channel manually with `add-channel` or
   automatically via the owner's first bot mention registers the parent channel
   as `mention` mode with `allowFrom:[ownerId]`. Broaden access explicitly with

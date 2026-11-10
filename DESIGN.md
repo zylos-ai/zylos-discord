@@ -146,7 +146,7 @@ and can use owner approval through DM pairing.
 - **Voice-note "transcribing" indicator — DEFERRED (smoke-test finding).** The 💡 thinking-reaction / typing indicator is set *after* media+transcription resolves, so a slow voice note shows no feedback during the (multi-second) Whisper run. Fix: set the indicator *before* starting transcription.
 
 ### Notable decisions made during the build
-- **Owner always bypasses `groupPolicy=disabled`** (cross-channel standard, M3).
+- **`groupPolicy=disabled` rejects the owner too** (2026-11-10, owner decision, aligned with Telegram; replaces the earlier M3 owner bypass). The owner still bypasses the channel allowlist.
 - **Discord channel adds default owner-only** (`allowFrom:[ownerId]`, mention mode) for both manual `add-channel` and owner-mention auto-add — an intentionally strict, opt-in default (the owner explicitly broadens access; adds never default to allow-all).
 - **DM pairing mirrors Zalo, Zalo Personal, and Microsoft Teams:** unknown DM senders are queued for owner approval, pending/denied users are deduplicated to prevent owner-notify spam, and the agent never auto-approves access.
 - **CLI group parity:** Discord keeps `channels{}` internally, but `group-*` admin commands alias the matching `channel-*` commands; `set-channel-allowfrom` is the one-shot `allowFrom` setter.
