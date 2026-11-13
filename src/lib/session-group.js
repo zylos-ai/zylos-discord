@@ -29,7 +29,7 @@ const SESSION_GROUP = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const DM = 1;
 const GROUP_DM = 3;
 const THREAD_TYPES = new Set([10, 11, 12]);
-const LOOKUP_TIMEOUT_MS = 4000; // Core gives the lookup script 5 s
+const LOOKUP_TIMEOUT_MS = 3000; // Core gives the lookup script 5 s, leave room for Node startup
 
 /**
  * Core's session-group name contract (zylos-core c4-session-group.js): at most

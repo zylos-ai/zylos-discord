@@ -57,6 +57,8 @@ export function classifyC4Rejection(response) {
   if (!Array.isArray(persisted)) return 'uncertain';
   return persisted.length > 0 ? 'committed' : 'not_stored';
 }
+/** c4-receive error codes worth one retry: transient, nothing stored. */
+const RETRYABLE_C4_CODES = new Set(['DB_BUSY']);
 const MAX_EDIT_TEXT_LENGTH = 4000;
 
 export function escapeXml(value) {
@@ -211,9 +213,10 @@ export function sendToC4(channel, endpoint, content, onReject, { retryDelayMs = 
     onReject?.(GENERIC_REJECT_REPLY);
     return done('rejected');
   }
-  let sessionGroup;
+  // Only Core with --session-group needs the group; older Core never fails here.
+  let sessionGroup = null;
   try {
-    sessionGroup = sessionGroupFromEndpoint(endpoint);
+    if (c4ReceiveSupportsOption('--session-group')) sessionGroup = sessionGroupFromEndpoint(endpoint);
   } catch (err) {
     // Never fall back to the overall group.
     console.error(`[discord] cannot derive session group, not sending: ${err.message}`);
@@ -239,12 +242,13 @@ export function sendToC4(channel, endpoint, content, onReject, { retryDelayMs = 
     return done('rejected');
   };
 
-  // Retry once only when nothing can have been stored: c4-receive never
-  // started, or it answered ok:false with persisted=[] (zylos-telegram v0.6.0).
+  // Retry once only when nothing can have been stored and a retry can help:
+  // c4-receive never started, or it answered ok:false with persisted=[] and a
+  // transient code (DB_BUSY). Deterministic errors (INVALID_ARGS, ...) fail again.
   // A call that ran without a structured answer (killed, crashed, bad output)
   // may have committed the row, so it is never retried.
   const retryable = (error, response) => (response?.ok === false
-    ? classifyC4Rejection(response) === 'not_stored'
+    ? classifyC4Rejection(response) === 'not_stored' && RETRYABLE_C4_CODES.has(response.error?.code)
     : neverStarted(error));
 
   run((error, stdout) => {

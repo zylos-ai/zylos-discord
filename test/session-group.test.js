@@ -198,6 +198,24 @@ describe('c4-receive option gating', () => {
   });
 });
 
+let sgCoreDir = null;
+let sgOldZylosDir;
+/** Point ZYLOS_DIR at a fake Core whose c4-receive accepts --session-group. */
+function withSessionGroupCore() {
+  sgCoreDir = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-core-'));
+  const dir = path.join(sgCoreDir, '.claude/skills/comm-bridge/scripts');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'c4-receive-options.json'), JSON.stringify({ options: { '--session-group': {} } }));
+  sgOldZylosDir = process.env.ZYLOS_DIR;
+  process.env.ZYLOS_DIR = sgCoreDir;
+}
+afterEach(() => {
+  if (!sgCoreDir) return;
+  if (sgOldZylosDir === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = sgOldZylosDir;
+  fs.rmSync(sgCoreDir, { recursive: true, force: true });
+  sgCoreDir = null;
+});
+
 describe('sendToC4 rejection handling', () => {
   const fail = (persisted) => ({
     error: Object.assign(new Error('exit 1'), { code: 1 }),
@@ -236,7 +254,8 @@ describe('sendToC4 rejection handling', () => {
   it('not stored: generic notice, core text never shown', async () => {
     const r = await run([fail([]), fail([])]);
     expect(r.notices).toEqual([GENERIC_REJECT_REPLY]);
-    expect(r.calls).toHaveLength(2);
+    // code X is not transient, so no retry
+    expect(r.calls).toHaveLength(1);
   });
   it('unknown persistence: uncertain notice', async () => {
     const r = await run([fail(undefined)]);
@@ -248,10 +267,58 @@ describe('sendToC4 rejection handling', () => {
     expect(r.calls).toHaveLength(1);
   });
   it('invalid endpoint: never sent to the overall group', async () => {
+    withSessionGroupCore();
     const r = await run([], 'not-a-channel');
     expect(r.outcome).toBe('rejected');
     expect(r.calls).toHaveLength(0);
     expect(r.notices).toEqual([GENERIC_REJECT_REPLY]);
+  });
+  it('old Core without --session-group: group is not derived, message still sent', async () => {
+    const r = await run([], 'not-a-channel');
+    expect(r.outcome).toBe('sent');
+    expect(r.calls[0]).not.toContain('--session-group');
+  });
+});
+
+describe('channel-kinds write failure (review PR #25 approval)', () => {
+  const deliver = (endpoint) => new Promise((resolve) => {
+    const calls = [];
+    const notices = [];
+    sendToC4('discord', endpoint, 'hello', (n) => notices.push(n), {
+      exec: (_bin, argv, _opts, cb) => { calls.push(argv); cb(null, '{"ok":true}'); },
+      retryDelayMs: 0,
+      onDone: (outcome) => resolve({ outcome, calls, notices })
+    });
+  });
+  const breakStore = () => {
+    fs.rmSync(channelKindsPath(), { force: true });
+    fs.mkdirSync(channelKindsPath());
+    resetChannelKindsCache();
+  };
+  const dm = { author: { id: 'u7', bot: false }, channel: { id: '4242424242', isDMBased: () => true } };
+
+  it('channel-kinds.json replaced by a directory: inbound DM still delivered to its DM group', async () => {
+    withSessionGroupCore();
+    breakStore();
+    expect(recordChannelFromMessage(dm)).toBe(false);
+    expect(getChannelKind('4242424242')).toEqual({ kind: 'dm', userId: 'u7' });
+    const r = await deliver(buildEndpoint('4242424242', { messageId: '1', correlationId: 'c' }));
+    expect(r.outcome).toBe('sent');
+    expect(r.notices).toEqual([]);
+    expect(r.calls[0].slice(-2)).toEqual(['--session-group', 'dm-4242424242']);
+    expect(fs.readdirSync(path.dirname(channelKindsPath())).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+  it('observed kind survives a fresh reload of the (unreadable) file', () => {
+    breakStore();
+    recordChannelFromMessage(dm);
+    // A miss on another id forces load({ fresh: true }), which replaces the cache.
+    expect(getChannelKind('999999')).toBeNull();
+    expect(getChannelKind('4242424242')).toEqual({ kind: 'dm', userId: 'u7' });
+  });
+  it('old Core: a broken store never blocks inbound', async () => {
+    breakStore();
+    const r = await deliver('77777777|msg:1');
+    expect(r.outcome).toBe('sent');
   });
 });
 
@@ -336,7 +403,7 @@ describe('sendToC4 retry policy (zylos-telegram v0.6.0)', () => {
       exec, retryDelayMs: 0, onDone: (outcome) => resolve({ outcome, calls, notices })
     });
   });
-  const notStored = { error: Object.assign(new Error('exit 1'), { code: 1 }), stdout: JSON.stringify({ ok: false, error: { code: 'BUSY', message: 'x', persisted: [] } }) };
+  const notStored = { error: Object.assign(new Error('exit 1'), { code: 1 }), stdout: JSON.stringify({ ok: false, error: { code: 'DB_BUSY', message: 'x', persisted: [] } }) };
   const spawnFail = { error: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT', syscall: 'spawn node' }), stdout: '' };
 
   it('ok:false with persisted=[] is retried once, then succeeds', async () => {
@@ -349,6 +416,13 @@ describe('sendToC4 retry policy (zylos-telegram v0.6.0)', () => {
   it('ok:false with persisted=[] twice: generic notice, no third try', async () => {
     const r = await run([notStored, notStored]);
     expect(r.calls).toHaveLength(2);
+    expect(r.notices).toEqual([GENERIC_REJECT_REPLY]);
+  });
+  it('ok:false persisted=[] with a deterministic code (INVALID_ARGS): not retried', async () => {
+    const invalid = { error: Object.assign(new Error('exit 1'), { code: 1 }), stdout: JSON.stringify({ ok: false, error: { code: 'INVALID_ARGS', message: 'x', persisted: [] } }) };
+    const r = await run([invalid, { error: null, stdout: '{"ok":true}' }]);
+    expect(r.outcome).toBe('rejected');
+    expect(r.calls).toHaveLength(1);
     expect(r.notices).toEqual([GENERIC_REJECT_REPLY]);
   });
   it('c4-receive never started: retried once', async () => {
