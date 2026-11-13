@@ -250,6 +250,8 @@ export function sendToC4(channel, endpoint, content, onReject, { retryDelayMs = 
   run((error, stdout) => {
     if (!error) return done('sent');
     const response = parseC4Response(stdout);
+    // ok:true means the row was committed even if the process then died.
+    if (response?.ok === true) return done('sent');
     const structured = response?.ok === false && response.error?.message;
     if (!retryable(error, response)) {
       if (structured) return handleRejection(response, 'rejected');
@@ -262,6 +264,7 @@ export function sendToC4(channel, endpoint, content, onReject, { retryDelayMs = 
       run((retryError, retryStdout) => {
         if (!retryError) return done('sent');
         const retryResponse = parseC4Response(retryStdout);
+        if (retryResponse?.ok === true) return done('sent');
         if (retryResponse?.ok === false && retryResponse.error?.message) {
           return handleRejection(retryResponse, 'rejected after retry');
         }

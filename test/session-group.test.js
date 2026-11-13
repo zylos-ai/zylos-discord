@@ -362,6 +362,12 @@ describe('sendToC4 retry policy (zylos-telegram v0.6.0)', () => {
     expect(r.calls).toHaveLength(1);
     expect(r.notices).toEqual([UNCERTAIN_REPLY]);
   });
+  it('ok:true printed, then killed: counted as sent, no notice', async () => {
+    const r = await run([{ error: Object.assign(new Error('killed'), { signal: 'SIGKILL' }), stdout: '{"ok":true,"id":62}' }]);
+    expect(r.outcome).toBe('sent');
+    expect(r.calls).toHaveLength(1);
+    expect(r.notices).toEqual([]);
+  });
   it('ok:false without persisted: not retried', async () => {
     const r = await run([{ error: new Error('exit 1'), stdout: JSON.stringify({ ok: false, error: { code: 'X', message: 'm' } }) }]);
     expect(r.calls).toHaveLength(1);
