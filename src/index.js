@@ -13,7 +13,6 @@ import {
   resolveGuildAccess
 } from './lib/auth.js';
 import {
-  buildEventEndpoint,
   buildEndpoint,
   formatDmMessage,
   formatGroupMessage,
@@ -52,10 +51,12 @@ import {
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
   shouldForwardReaction,
-  stickersNote
+  stickersNote,
+  eventEndpoint
 } from './lib/inbound.js';
 import { downloadAttachment } from './lib/media.js';
 import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
+import { recordChannelFromMessage } from './lib/channel-kinds.js';
 import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib/recording.js';
 import { isVoiceMessageAttachment, resolveVoiceNote } from './lib/voice.js';
 
@@ -214,8 +215,8 @@ async function notifyOwnerDmPairingRequest({ userId, name, firstMessage }) {
     console.warn(`${LOG} failed to notify owner about DM pairing request: ${err.message}`);
   }
 
-  sendToC4('discord', 'admin|type:dm-pairing', notification, (errMsg) => {
-    console.warn(`${LOG} C4 rejected DM pairing admin notice: ${errMsg}`);
+  sendToC4('discord', 'admin|type:dm-pairing', notification, (notice) => {
+    if (notice) console.warn(`${LOG} C4 did not take the DM pairing admin notice`);
   });
 }
 
@@ -252,18 +253,12 @@ function appendNote(text, note) {
   return cleanText ? `${cleanText} ${note}` : note;
 }
 
-function eventEndpoint(message, kind) {
-  const channelId = message?.channel?.id;
-  const messageId = message?.id;
-  if (!channelId || !messageId) return null;
-  return buildEventEndpoint(channelId, { messageId, kind });
-}
-
 function sendDiscordEvent(message, kind, content) {
   const endpoint = eventEndpoint(message, kind);
   if (!endpoint) return false;
-  sendToC4('discord', endpoint, content, (errMsg) => {
-    console.warn(`${LOG} C4 rejected ${kind} event: ${errMsg}`);
+  recordChannelFromMessage(message);
+  sendToC4('discord', endpoint, content, (notice) => {
+    if (notice) console.warn(`${LOG} C4 did not take the ${kind} event`);
   });
   return true;
 }
@@ -494,6 +489,7 @@ async function handleGuildMessage(message) {
 
   if (!forwarding.shouldRespond) return;
 
+  recordChannelFromMessage(message);
   const endpoint = buildEndpoint(historyKey, { messageId: message.id, correlationId });
   const channelName = resolveChannelName(config, message, policyChannelId, isThread);
   const history = getHistory(historyKey, message.id, limit);
@@ -512,10 +508,10 @@ async function handleGuildMessage(message) {
     replyingTo
   });
 
-  sendToC4('discord', endpoint, content, async (errMsg) => {
+  sendToC4('discord', endpoint, content, async (notice) => {
     stopTyping(correlationId);
     await clearReaction(message);
-    await message.reply(errMsg).catch(() => {});
+    if (notice) await message.reply(notice).catch(() => {});
   });
 }
 
@@ -586,7 +582,8 @@ async function handleDirectMessage(message) {
   const noteText = stickerNote ? appendNote(text, stickerNote) : text;
   const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
 
-  const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId });
+  const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId, dm: true });
+  recordChannelFromMessage(message);
 
   try {
     recordIncoming({
@@ -604,10 +601,10 @@ async function handleDirectMessage(message) {
     warn: (detail) => console.warn(`${LOG} ${detail}`)
   });
   const content = formatDmMessage({ username, text: historyText, filePath: media.filePaths, replyingTo });
-  sendToC4('discord', endpoint, content, async (errMsg) => {
+  sendToC4('discord', endpoint, content, async (notice) => {
     stopTyping(correlationId);
     await clearReaction(message);
-    await message.reply(errMsg).catch(() => {});
+    if (notice) await message.reply(notice).catch(() => {});
   });
 }
 

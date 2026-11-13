@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-13
+
+### Added
+- Session groups for multi-session zylos-core: DMs are `dm-<channel id>`, guild
+  channels, threads and forum posts `channel-<channel id>`, owner admin notices
+  `admin`. DM vs channel comes from the channel's real type, recorded on
+  inbound in `channel-kinds.json` (the `dm:1` endpoint marker is informational
+  only). `--session-group` is passed only when the installed Core lists it in
+  `c4-receive-options.json`, so older Cores see unchanged args.
+- `scripts/session-group.js <endpoint>` prints the group for an endpoint (Core
+  calls it on outbound sends and the scheduler stores it). A channel not seen
+  yet is looked up once via the Discord API; if its type cannot be
+  established it exits 1 instead of guessing.
+- Outbound policy in `send.js`, decided from the real channel type (Discord
+  API, else the kind recorded on inbound; never the endpoint marker): a DM is
+  sent only if the recipient passes the inbound DM policy (owner always; then
+  `dmPolicy` / `dmAllowFrom`); a guild channel (threads use their parent) must
+  pass the inbound channel policy, and an unlisted channel only accepts a reply
+  to an owner-written or bot-written message; an unknown destination is sent
+  only if listed in config and `groupPolicy` is not `disabled`. Blocked sends
+  exit 2 with `outbound blocked` and send, upload and record nothing.
+
+### Changed
+- `groupPolicy: disabled` now rejects the owner too, inbound and outbound, and
+  no longer auto-registers channels (aligned with Telegram). The owner can still
+  use non-allowlisted channels when the policy is `allowlist`.
+- c4-receive rejections follow `error.persisted`: already stored -> no reply and
+  no resend; not stored -> "please try again later"; unknown -> "may not have
+  reached me". Core's error text is logged only, never sent to Discord users.
+- No component-side timeout kills c4-receive any more (a kill after Core stored
+  the row followed by a retry would deliver the message twice). c4-receive is
+  retried once only when nothing can have been stored (never started, or
+  `ok:false` with `persisted: []`), as in zylos-telegram v0.6.0.
+
+### Upgrade notes
+- Outbound sends are now checked against the DM and channel policies. An agent
+  that sends proactively to a DM recipient outside `dmPolicy`/`dmAllowFrom`, or
+  to an unlisted server channel, will get `outbound blocked` (exit 2).
+- `groupPolicy: disabled` now also blocks the owner (inbound and outbound).
+
 ## [0.1.1] - 2026-06-05
 
 ### Added
