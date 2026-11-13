@@ -12,7 +12,9 @@ import path from 'node:path';
 import { ChannelType, Routes } from 'discord.js';
 import { isChannelAllowed, isDmAuthorized, isOwner } from '../src/lib/auth.js';
 import { getBotToken, getConfig } from '../src/lib/config.js';
-import { parseEndpoint } from '../src/lib/c4.js';
+import { parseEndpoint } from '../src/lib/endpoint.js';
+import { getChannelKind } from '../src/lib/channel-kinds.js';
+import { recordChannelFromApi } from '../src/lib/session-group.js';
 import { markTypingDone, safeCorrelationId, THINKING_REACTION } from '../src/lib/reactions.js';
 import { getInternalToken } from '../src/lib/recording.js';
 
@@ -297,22 +299,39 @@ async function getDestinationChannel() {
 }
 
 /**
- * Outbound destination policy, decided from the channel Discord reports (not
- * the endpoint's dm:1 marker):
+ * Outbound destination policy. DM vs guild channel is decided from the real
+ * conversation type, never from the endpoint's agent-writable `dm:1` marker:
+ * first the channel Discord reports, then (if that lookup fails) the kind the
+ * component recorded when it received from the channel (channel-kinds.json).
  * - DM: the recipient must pass the inbound DM policy (owner always; then
  *   dmPolicy / dmAllowFrom). Group DMs are refused.
  * - Guild channel (threads and forum posts use their parent): allowed when the
  *   channel passes the inbound channel policy; otherwise only a reply to a
- *   message the owner wrote, so owner conversations in unlisted channels work.
+ *   message the owner wrote or to the bot's own message (an owner conversation
+ *   in an unlisted channel, including a reaction to the bot's reply).
  *   groupPolicy=disabled blocks every guild send, owner replies included.
- * If the channel lookup fails, only a channel listed in config is allowed.
+ * - Unknown (lookup failed and never seen): treated as the strictest case, a
+ *   guild channel with no reply exemption: only a channel listed in config,
+ *   and not when groupPolicy=disabled.
+ * @param {object|null} channel - Discord API channel, or null when the lookup failed
+ * @param {object} opts
+ * @param {object|null} [opts.known] - recorded kind (getChannelKind), used when channel is null
  * @returns {string|null} denial reason, or null when allowed
  */
-export function outboundDenialReason(channel, { config, channelId, replyAuthorId = null }) {
+export function outboundDenialReason(channel, { config, channelId, replyAuthorId = null, botUserId = null, known = null }) {
   if (!channel) {
-    return isChannelAllowed(config, channelId) && config.groupPolicy !== 'open'
+    if (known?.kind === 'dm') {
+      if (!known.userId) return 'cannot verify DM recipient (channel lookup failed)';
+      return isDmAuthorized(config, known.userId)
+        ? null
+        : `DM recipient ${known.userId} is not allowed by dmPolicy=${config.dmPolicy}`;
+    }
+    if (known?.kind === 'guild') {
+      return guildDenialReason(config, known.policyChannelId || channelId, replyAuthorId, botUserId);
+    }
+    return Object.hasOwn(config.channels || {}, String(channelId)) && config.groupPolicy !== 'disabled'
       ? null
-      : 'cannot verify destination (channel lookup failed)';
+      : 'cannot verify destination (channel lookup failed and the channel is not listed in config)';
   }
   if (channel.type === ChannelType.GroupDM) return 'group DMs are not allowed';
   if (channel.type === ChannelType.DM) {
@@ -324,10 +343,25 @@ export function outboundDenialReason(channel, { config, channelId, replyAuthorId
     return null;
   }
   const policyChannelId = THREAD_TYPES.has(channel.type) ? (channel.parent_id || channel.id) : channel.id;
+  return guildDenialReason(config, policyChannelId, replyAuthorId, botUserId);
+}
+
+function guildDenialReason(config, policyChannelId, replyAuthorId, botUserId) {
   if (isChannelAllowed(config, policyChannelId)) return null;
   if (config.groupPolicy === 'disabled') return 'groupPolicy=disabled';
   if (replyAuthorId && isOwner(config, replyAuthorId)) return null;
-  return `channel ${policyChannelId} is not allowed (groupPolicy=${config.groupPolicy}) and the reply target is not an owner message`;
+  if (replyAuthorId && botUserId && String(replyAuthorId) === String(botUserId)) return null;
+  return `channel ${policyChannelId} is not allowed (groupPolicy=${config.groupPolicy}) and the reply target is not an owner or bot message`;
+}
+
+/** The bot's user id is the base64 first segment of its token. */
+export function botUserIdFromToken(token) {
+  try {
+    const id = Buffer.from(String(token || '').split('.')[0], 'base64').toString('utf8');
+    return /^\d+$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
 }
 
 const THREAD_TYPES = new Set([
@@ -349,17 +383,28 @@ async function fetchMessageAuthorId(channelId, messageId) {
   }
 }
 
+export class OutboundBlockedError extends Error {}
+// Distinct exit code for a policy refusal (Core reports any non-zero exit as
+// SEND_FAILED and passes the code through), so it can be told apart from a
+// delivery failure (1).
+export const EXIT_OUTBOUND_BLOCKED = 2;
+
 async function assertOutboundAllowed() {
   const config = getConfig();
   const channel = await getDestinationChannel();
-  const opts = { config, channelId: endpoint.channelId };
+  if (channel) recordChannelFromApi(channel);
+  const known = channel ? null : getChannelKind(endpoint.channelId);
+  const opts = { config, channelId: endpoint.channelId, known };
   let reason = outboundDenialReason(channel, opts);
-  // Unlisted guild channel: allow only a reply to an owner-written message.
-  if (reason && channel && endpoint.msg && channel.type !== ChannelType.DM && channel.type !== ChannelType.GroupDM) {
+  const isGuild = channel
+    ? channel.type !== ChannelType.DM && channel.type !== ChannelType.GroupDM
+    : known?.kind === 'guild';
+  // Unlisted guild channel: allow only a reply to an owner-written or bot-written message.
+  if (reason && isGuild && endpoint.msg && config.groupPolicy !== 'disabled') {
     const replyAuthorId = await fetchMessageAuthorId(endpoint.channelId, endpoint.msg);
-    reason = outboundDenialReason(channel, { ...opts, replyAuthorId });
+    reason = outboundDenialReason(channel, { ...opts, replyAuthorId, botUserId: botUserIdFromToken(getResolvedBotToken()) });
   }
-  if (reason) throw new Error(`outbound blocked: ${reason}`);
+  if (reason) throw new OutboundBlockedError(`outbound blocked: ${reason}`);
 }
 
 async function resolveSendTarget() {
@@ -756,7 +801,7 @@ async function main() {
   } catch (err) {
     await cleanup();
     console.error(`Error: ${err.message}`);
-    process.exit(1);
+    process.exit(err instanceof OutboundBlockedError ? EXIT_OUTBOUND_BLOCKED : 1);
   }
 }
 

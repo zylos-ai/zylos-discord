@@ -13,7 +13,6 @@ import {
   resolveGuildAccess
 } from './lib/auth.js';
 import {
-  buildEventEndpoint,
   buildEndpoint,
   formatDmMessage,
   formatGroupMessage,
@@ -52,10 +51,12 @@ import {
   shouldForwardMessageDelete,
   shouldForwardMessageUpdate,
   shouldForwardReaction,
-  stickersNote
+  stickersNote,
+  eventEndpoint
 } from './lib/inbound.js';
 import { downloadAttachment } from './lib/media.js';
 import { clearReaction, setReaction, startTyping, stopAllTyping, stopTyping } from './lib/reactions.js';
+import { recordChannelFromMessage } from './lib/channel-kinds.js';
 import { recordIncoming, startRecordingServer, stopRecordingServer } from './lib/recording.js';
 import { isVoiceMessageAttachment, resolveVoiceNote } from './lib/voice.js';
 
@@ -252,16 +253,10 @@ function appendNote(text, note) {
   return cleanText ? `${cleanText} ${note}` : note;
 }
 
-function eventEndpoint(message, kind) {
-  const channelId = message?.channel?.id;
-  const messageId = message?.id;
-  if (!channelId || !messageId) return null;
-  return buildEventEndpoint(channelId, { messageId, kind, dm: !message.guild });
-}
-
 function sendDiscordEvent(message, kind, content) {
   const endpoint = eventEndpoint(message, kind);
   if (!endpoint) return false;
+  recordChannelFromMessage(message);
   sendToC4('discord', endpoint, content, (notice) => {
     if (notice) console.warn(`${LOG} C4 did not take the ${kind} event`);
   });
@@ -494,6 +489,7 @@ async function handleGuildMessage(message) {
 
   if (!forwarding.shouldRespond) return;
 
+  recordChannelFromMessage(message);
   const endpoint = buildEndpoint(historyKey, { messageId: message.id, correlationId });
   const channelName = resolveChannelName(config, message, policyChannelId, isThread);
   const history = getHistory(historyKey, message.id, limit);
@@ -587,6 +583,7 @@ async function handleDirectMessage(message) {
   const historyText = mediaNote ? appendNote(noteText, mediaNote) : noteText;
 
   const endpoint = buildEndpoint(message.channel.id, { messageId: message.id, correlationId, dm: true });
+  recordChannelFromMessage(message);
 
   try {
     recordIncoming({

@@ -108,12 +108,15 @@ and can use owner approval through DM pairing.
   permissions.
 - DM access is controlled by `dmPolicy`; server-channel access is controlled by
   `groupPolicy`, per-channel `allowFrom`, and owner bypass rules.
-- Outbound DMs follow the same DM policy: `send.js` resolves the channel via the
-  Discord API (not the `dm:1` marker) and blocks DMs to recipients the inbound
-  policy would reject. Guild channels (threads use their parent) must pass the
-  inbound channel policy; an unlisted channel only accepts a reply to an
-  owner-written message (checked via the Discord API), so owner conversations
-  there keep working.
+- Outbound sends follow the inbound policies. DM vs guild channel comes from the
+  real conversation type: the Discord API channel lookup, else the kind the
+  component recorded on inbound (`channel-kinds.json`); never the agent-writable
+  `dm:1` endpoint marker. DMs to recipients the inbound DM policy would reject
+  are blocked. Guild channels (threads use their parent) must pass the inbound
+  channel policy; an unlisted channel only accepts a reply to an owner-written
+  or bot-written message (checked via the Discord API). An unknown destination
+  is treated as the strictest case: only a channel listed in config, not under
+  `groupPolicy=disabled`. Blocked sends exit 2.
 - Unknown DM senders under `dmPolicy:"pairing"` are queued for owner approval;
   the agent never auto-approves access.
 - Discord mentions from outbound messages are disabled with
@@ -147,6 +150,7 @@ and can use owner approval through DM pairing.
 
 ### Notable decisions made during the build
 - **`groupPolicy=disabled` rejects the owner too** (2026-11-10, owner decision, aligned with Telegram; replaces the earlier M3 owner bypass). The owner still bypasses the channel allowlist.
+- **Session groups and outbound policy use recorded channel kinds** (2026-11-13, owner decision on PR #25 review). Discord ids cannot tell a DM from a guild channel and endpoint markers can be written by the agent, so the component persists each channel's kind from what it observed (inbound message/event, or a Discord API lookup); first record wins so a session-group mapping never moves. An unknown conversation fails the lookup (exit 1) instead of being guessed, since Core 1.0.0-beta.8 and the scheduler store the answer permanently.
 - **Discord channel adds default owner-only** (`allowFrom:[ownerId]`, mention mode) for both manual `add-channel` and owner-mention auto-add — an intentionally strict, opt-in default (the owner explicitly broadens access; adds never default to allow-all).
 - **DM pairing mirrors Zalo, Zalo Personal, and Microsoft Teams:** unknown DM senders are queued for owner approval, pending/denied users are deduplicated to prevent owner-notify spam, and the agent never auto-approves access.
 - **CLI group parity:** Discord keeps `channels{}` internally, but `group-*` admin commands alias the matching `channel-*` commands; `set-channel-allowfrom` is the one-shot `allowFrom` setter.
