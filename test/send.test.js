@@ -41,7 +41,7 @@ function runSend(args, { input = null, env = {} } = {}) {
   });
 }
 
-function makeHome({ port, textMode = 'markdown' }) {
+function makeHome({ port, textMode = 'markdown', policy = {} }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'discord-send-'));
   const dataDir = path.join(home, 'zylos/components/discord');
   fs.mkdirSync(dataDir, { recursive: true });
@@ -49,7 +49,10 @@ function makeHome({ port, textMode = 'markdown' }) {
     enabled: true,
     botToken: 'secret',
     internalPort: port,
-    textMode
+    textMode,
+    // Most tests exercise delivery, not policy: let any guild channel through.
+    groupPolicy: 'open',
+    ...policy
   }));
   return home;
 }
@@ -67,7 +70,7 @@ function parseRequestBody(req, bodyText) {
   return JSON.parse(bodyText);
 }
 
-async function withFakeServers(fn, { channelTypes = {}, failChannelGets = [] } = {}) {
+async function withFakeServers(fn, { channelTypes = {}, channelRecipients = {}, channelParents = {}, messageAuthors = {}, failChannelGets = [] } = {}) {
   const requests = [];
   const failingGets = new Set(failChannelGets);
   let messageSeq = 0;
@@ -85,6 +88,14 @@ async function withFakeServers(fn, { channelTypes = {}, failChannelGets = [] } =
         body
       });
 
+      if (req.method === 'GET' && /^\/channels\/[^/]+\/messages\/[^/]+$/.test(req.url || '')) {
+        const messageId = req.url.split('/')[4];
+        const author = messageAuthors[messageId];
+        res.writeHead(author ? 200 : 404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(author ? { id: messageId, author: { id: author } } : { message: 'Unknown Message' }));
+        return;
+      }
+
       if (req.method === 'GET' && req.url?.startsWith('/channels/')) {
         const channelId = req.url.split('/')[2];
         if (failingGets.has(channelId)) {
@@ -93,7 +104,10 @@ async function withFakeServers(fn, { channelTypes = {}, failChannelGets = [] } =
           return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ id: channelId, type: channelTypes[channelId] ?? 0 }));
+        const channel = { id: channelId, type: channelTypes[channelId] ?? 0 };
+        if (channelParents[channelId]) channel.parent_id = channelParents[channelId];
+        if (channelRecipients[channelId]) channel.recipients = [{ id: channelRecipients[channelId] }];
+        res.end(JSON.stringify(channel));
         return;
       }
 
@@ -330,7 +344,8 @@ multiselect: yes`)).toEqual({
 
   it('falls back to normal messages when channel type lookup fails', async () => {
     await withFakeServers(async ({ port, requests }) => {
-      const home = makeHome({ port });
+      // A failed lookup is only tolerated for a channel listed in config.
+      const home = makeHome({ port, policy: { groupPolicy: 'allowlist', channels: { chan1: { name: 'c', mode: 'mention' } } } });
       const result = await runSend(['chan1', 'fallback send'], {
         env: {
           HOME: home,
@@ -438,7 +453,8 @@ multiselect: yes`)).toEqual({
       });
 
       expect(result.code).toBe(0);
-      expect(requests.some((req) => req.method === 'GET' && req.url === '/channels/thread1')).toBe(false);
+      // One channel lookup for the outbound DM check, none for forum detection.
+      expect(requests.filter((req) => req.method === 'GET' && req.url === '/channels/thread1')).toHaveLength(1);
       expect(requests.some((req) => req.url === '/channels/thread1/threads')).toBe(false);
       expect(requests.find((req) => req.url === '/channels/thread1/messages')?.body).toEqual({
         content: 'reply body',
@@ -620,5 +636,187 @@ Release now?
       expect(result.code).toBe(0);
       expect(requests.find((req) => req.url === '/channels/chan1/messages')?.body.content).toBe('\\*\\*bold\\*\\* \\_x\\_');
     });
+  });
+});
+
+describe('outbound DM policy', () => {
+  const dmCases = [
+    ['owner', { owner: 'u-owner', dmPolicy: 'owner' }, 'u-owner', true],
+    ['owner with miscased dmPolicy', { owner: 'u-owner', dmPolicy: 'Owner' }, 'u-owner', true],
+    ['stranger under owner policy', { owner: 'u-owner', dmPolicy: 'owner' }, 'u-x', false],
+    ['allowlisted user', { owner: 'u-owner', dmPolicy: 'allowlist', dmAllowFrom: ['u-a'] }, 'u-a', true],
+    ['unlisted user under allowlist', { owner: 'u-owner', dmPolicy: 'allowlist', dmAllowFrom: ['u-a'] }, 'u-x', false],
+    ['unapproved user under pairing', { owner: 'u-owner', dmPolicy: 'pairing', dmAllowFrom: [] }, 'u-x', false],
+    ['anyone under open', { owner: 'u-owner', dmPolicy: 'open' }, 'u-x', true]
+  ];
+
+  for (const [name, policy, recipient, allowed] of dmCases) {
+    it(`${allowed ? 'sends' : 'blocks'} DM to ${name}`, async () => {
+      await withFakeServers(async ({ port, requests }) => {
+        const home = makeHome({ port, policy });
+        const result = await runSend(['dm1', 'hello'], {
+          env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+        });
+        const posted = requests.some((req) => req.method === 'POST' && req.url === '/channels/dm1/messages');
+        expect(posted).toBe(allowed);
+        expect(result.code).toBe(allowed ? 0 : 2);
+        if (!allowed) {
+          expect(result.stderr).toContain('outbound blocked');
+          expect(requests.some((req) => req.url === '/internal/record-outgoing')).toBe(false);
+        }
+      }, { channelTypes: { dm1: 1 }, channelRecipients: { dm1: recipient } });
+    });
+  }
+
+  it('blocks media to a disallowed DM before uploading', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, policy: { owner: 'u-owner', dmPolicy: 'owner' } });
+      const file = path.join(home, 'a.txt');
+      fs.writeFileSync(file, 'x');
+      const result = await runSend(['dm1', `[MEDIA:file]${file}`], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      expect(result.code).toBe(2);
+      expect(requests.some((req) => req.method === 'POST' && req.url?.startsWith('/channels/dm1'))).toBe(false);
+    }, { channelTypes: { dm1: 1 }, channelRecipients: { dm1: 'u-x' } });
+  });
+
+  it('blocks a DM-looking endpoint when the channel lookup fails', async () => {
+    await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, policy: { owner: 'u-owner', dmPolicy: 'open' } });
+      const result = await runSend(['dm1|msg:m1|dm:1', 'hello'], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain('cannot verify destination');
+      expect(requests.some((req) => req.method === 'POST' && req.url === '/channels/dm1/messages')).toBe(false);
+    }, { failChannelGets: ['dm1'] });
+  });
+});
+
+describe('outbound guild channel policy', () => {
+  const allowlist = { owner: 'u-owner', groupPolicy: 'allowlist', channels: { chanA: { name: 'a', mode: 'mention' } } };
+
+  async function sendTo(endpointStr, policy, serverOpts = {}) {
+    return await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, policy });
+      const result = await runSend([endpointStr, 'hello'], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      const channelId = endpointStr.split('|')[0];
+      const posted = requests.some((req) => req.method === 'POST' && req.url === `/channels/${channelId}/messages`);
+      return { result, posted };
+    }, serverOpts);
+  }
+
+  it('sends to an allowlisted channel', async () => {
+    const { result, posted } = await sendTo('chanA', allowlist);
+    expect(result.code).toBe(0);
+    expect(posted).toBe(true);
+  });
+
+  it('sends to a thread whose parent is allowlisted', async () => {
+    const { posted } = await sendTo('thr1', allowlist, { channelTypes: { thr1: 11 }, channelParents: { thr1: 'chanA' } });
+    expect(posted).toBe(true);
+  });
+
+  it('blocks a proactive send to an unlisted channel', async () => {
+    const { result, posted } = await sendTo('chanX', allowlist);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('outbound blocked: channel chanX is not allowed');
+    expect(posted).toBe(false);
+  });
+
+  it('allows a reply to an owner message in an unlisted channel', async () => {
+    const { result, posted } = await sendTo('chanX|msg:m1', allowlist, { messageAuthors: { m1: 'u-owner' } });
+    expect(result.code).toBe(0);
+    expect(posted).toBe(true);
+  });
+
+  it('blocks a reply to a non-owner message in an unlisted channel', async () => {
+    const { result, posted } = await sendTo('chanX|msg:m1', allowlist, { messageAuthors: { m1: 'u-other' } });
+    expect(result.code).toBe(2);
+    expect(posted).toBe(false);
+  });
+
+  it('blocks every guild send, owner replies included, when groupPolicy is disabled', async () => {
+    const disabled = { ...allowlist, groupPolicy: 'disabled' };
+    expect((await sendTo('chanA', disabled)).posted).toBe(false);
+    expect((await sendTo('chanA|msg:m1', disabled, { messageAuthors: { m1: 'u-owner' } })).posted).toBe(false);
+  });
+
+  it('on lookup failure sends only to a channel listed in config', async () => {
+    expect((await sendTo('chanA', allowlist, { failChannelGets: ['chanA'] })).posted).toBe(true);
+    expect((await sendTo('chanX', allowlist, { failChannelGets: ['chanX'] })).posted).toBe(false);
+  });
+});
+
+describe('outbound decisions use the real conversation type (review PR #25)', () => {
+  const allowlist = { owner: 'u-owner', groupPolicy: 'allowlist', channels: { chanA: { name: 'a', mode: 'mention' } } };
+  const botToken = `${Buffer.from('999').toString('base64')}.x.y`;
+
+  async function sendTo(endpointStr, policy, serverOpts = {}, { kinds = null } = {}) {
+    return await withFakeServers(async ({ port, requests }) => {
+      const home = makeHome({ port, policy });
+      const kindsPath = path.join(home, 'zylos/components/discord/channel-kinds.json');
+      if (kinds) fs.writeFileSync(kindsPath, JSON.stringify(kinds));
+      const result = await runSend([endpointStr, 'hello'], {
+        env: { HOME: home, DISCORD_API_BASE: `http://127.0.0.1:${port}` }
+      });
+      const channelId = endpointStr.split('|')[0];
+      const posted = requests.some((req) => req.method === 'POST' && req.url === `/channels/${channelId}/messages`);
+      const stored = fs.existsSync(kindsPath) ? JSON.parse(fs.readFileSync(kindsPath, 'utf8')) : {};
+      return { result, posted, stored };
+    }, serverOpts);
+  }
+
+  it('a dm:1 marker on a guild channel does not make it a DM', async () => {
+    const { result, posted } = await sendTo('chanX|dm:1', { ...allowlist, dmPolicy: 'open' });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('channel chanX is not allowed');
+    expect(posted).toBe(false);
+  });
+
+  it('records the kind learned from the channel lookup', async () => {
+    const { stored } = await sendTo('dm1', { owner: 'u-owner' }, { channelTypes: { dm1: 1 }, channelRecipients: { dm1: 'u-owner' } });
+    expect(stored.dm1).toEqual({ kind: 'dm', userId: 'u-owner' });
+  });
+
+  it('lookup failure: a recorded DM follows the DM policy of its recipient', async () => {
+    const opts = { failChannelGets: ['dm1'] };
+    const allowed = await sendTo('dm1', { owner: 'u-owner' }, opts, { kinds: { dm1: { kind: 'dm', userId: 'u-owner' } } });
+    expect(allowed.posted).toBe(true);
+    const denied = await sendTo('dm1', { owner: 'u-owner' }, opts, { kinds: { dm1: { kind: 'dm', userId: 'u-x' } } });
+    expect(denied.result.code).toBe(2);
+    expect(denied.posted).toBe(false);
+  });
+
+  it('lookup failure: a recorded thread uses its parent policy', async () => {
+    const r = await sendTo('thr1', allowlist, { failChannelGets: ['thr1'] }, { kinds: { thr1: { kind: 'guild', policyChannelId: 'chanA' } } });
+    expect(r.posted).toBe(true);
+  });
+
+  it('lookup failure with groupPolicy=open: a listed channel still sends, an unknown one does not', async () => {
+    const open = { ...allowlist, groupPolicy: 'open' };
+    expect((await sendTo('chanA', open, { failChannelGets: ['chanA'] })).posted).toBe(true);
+    expect((await sendTo('chanX', open, { failChannelGets: ['chanX'] })).posted).toBe(false);
+  });
+
+  it('lookup failure with groupPolicy=disabled: even a listed channel is blocked', async () => {
+    const r = await sendTo('chanA', { ...allowlist, groupPolicy: 'disabled' }, { failChannelGets: ['chanA'] });
+    expect(r.result.code).toBe(2);
+    expect(r.posted).toBe(false);
+  });
+
+  it('allows a reply to the bot\'s own message in an unlisted channel (owner reacted to a bot reply)', async () => {
+    const r = await sendTo('chanX|msg:m1', { ...allowlist, botToken }, { messageAuthors: { m1: '999' } });
+    expect(r.result.code).toBe(0);
+    expect(r.posted).toBe(true);
+  });
+
+  it('still blocks when the reply target cannot be fetched', async () => {
+    const r = await sendTo('chanX|msg:m404', { ...allowlist, botToken });
+    expect(r.result.code).toBe(2);
+    expect(r.posted).toBe(false);
   });
 });

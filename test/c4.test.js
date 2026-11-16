@@ -19,15 +19,20 @@ describe('c4 helpers', () => {
     expect(parseEndpoint(endpoint)).toEqual({
       channelId: 'channel123',
       msg: 'msg456',
-      req: 'channel123:msg456'
+      req: 'channel123:msg456',
+      dm: null
     });
+    const dmEndpoint = buildEndpoint('channel123', { messageId: 'msg456', dm: true });
+    expect(dmEndpoint).toBe('channel123|msg:msg456|req:channel123:msg456|dm:1');
+    expect(parseEndpoint(dmEndpoint).dm).toBe('1');
   });
 
   it('parses endpoints without optional fields', () => {
     expect(parseEndpoint('channel123')).toEqual({
       channelId: 'channel123',
       msg: null,
-      req: null
+      req: null,
+      dm: null
     });
   });
 

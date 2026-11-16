@@ -49,6 +49,8 @@ export async function autoRegisterOwnerMentionedChannel({
     let registration = null;
     const updated = updateConfig((nextConfig) => {
       if (!policyChannelId || !isOwner(nextConfig, userId)) return false;
+      // Disabled guild policy rejects the owner too; do not register channels.
+      if (nextConfig.groupPolicy === 'disabled') return false;
       const channels = ensureChannels(nextConfig);
       if (Object.prototype.hasOwnProperty.call(channels, String(policyChannelId))) return false;
       if (!isBotMentioned(message, clientUser)) return false;
@@ -80,7 +82,7 @@ export async function autoRegisterOwnerMentionedChannel({
     return { registered: true, notified: true, ...registration };
   }
 
-  if (!isOwner(config, userId)) {
+  if (!isOwner(config, userId) || config.groupPolicy === 'disabled') {
     return { registered: false };
   }
 

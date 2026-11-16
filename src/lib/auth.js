@@ -48,6 +48,10 @@ export function isSenderAllowed(config, policyChannelId, userId) {
 
 export function resolveGuildAccess(config, policyChannelId, userId, threadId = null) {
   const owner = isOwner(config, userId);
+  // groupPolicy=disabled rejects everyone, the owner included (same as Telegram).
+  if (config.groupPolicy === 'disabled') {
+    return { ok: false, owner, allowed: false, smart: false };
+  }
   const allowed = isChannelAllowed(config, policyChannelId);
   const smart = isSmartChannel(config, policyChannelId, threadId);
 

@@ -1,9 +1,64 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { sessionGroupFromEndpoint } from './session-group.js';
+import { parseEndpoint } from './endpoint.js';
 
-const C4_RECEIVE = path.join(process.env.HOME, 'zylos/.claude/skills/comm-bridge/scripts/c4-receive.js');
-const ENDPOINT_KEYS = new Set(['msg', 'req']);
+export { parseEndpoint };
+
+export function getC4ReceivePath() {
+  return path.join(process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos'),
+    '.claude/skills/comm-bridge/scripts/c4-receive.js');
+}
+
+/**
+ * Whether the installed Core's c4-receive accepts an option. Read from
+ * c4-receive-options.json next to c4-receive.js on every call; a missing or
+ * unreadable manifest means "not supported" (older Core), never a version check.
+ */
+export function c4ReceiveSupportsOption(name) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(
+      path.join(path.dirname(getC4ReceivePath()), 'c4-receive-options.json'), 'utf8'));
+    return manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest)
+      && manifest.options !== null && typeof manifest.options === 'object'
+      && !Array.isArray(manifest.options) && Object.hasOwn(manifest.options, name);
+  } catch {
+    return false;
+  }
+}
+
+export function buildC4ReceiveArgs({ channel, endpoint, content, sessionGroup }) {
+  const args = ['--channel', channel, '--endpoint', endpoint, '--json', '--content', content];
+  if (sessionGroup != null && sessionGroup !== '' && c4ReceiveSupportsOption('--session-group')) {
+    args.push('--session-group', sessionGroup);
+  }
+  return args;
+}
+
+export const GENERIC_REJECT_REPLY = "Sorry, I couldn't take this message right now. Please try again later.";
+export const UNCERTAIN_REPLY = "Sorry, this message may not have reached me. If you don't get a reply in a few minutes, please send it again.";
+
+/** A spawn failure: c4-receive never ran, so nothing was stored. */
+export function neverStarted(error) {
+  return typeof error?.code === 'string'
+    && typeof error?.syscall === 'string' && error.syscall.startsWith('spawn');
+}
+
+/**
+ * Classify a structured c4-receive rejection by error.persisted:
+ * non-empty array = Core committed the inbound row (send nothing, do not resend);
+ * empty array = nothing stored; anything else = Core cannot tell.
+ * @returns {'committed'|'not_stored'|'uncertain'}
+ */
+export function classifyC4Rejection(response) {
+  const persisted = response?.error?.persisted;
+  if (!Array.isArray(persisted)) return 'uncertain';
+  return persisted.length > 0 ? 'committed' : 'not_stored';
+}
+/** c4-receive error codes worth one retry: transient, nothing stored. */
+const RETRYABLE_C4_CODES = new Set(['DB_BUSY']);
 const MAX_EDIT_TEXT_LENGTH = 4000;
 
 export function escapeXml(value) {
@@ -15,10 +70,16 @@ export function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
-export function buildEndpoint(channelId, { messageId, correlationId } = {}) {
+/**
+ * Build the C4 reply endpoint. `dm: true` adds `dm:1` so session grouping can
+ * tell a DM channel from a guild channel without stored state; send.js ignores
+ * the key (it only routes by channel id and msg).
+ */
+export function buildEndpoint(channelId, { messageId, correlationId, dm = false } = {}) {
   const endpoint = [String(channelId)];
   if (messageId) endpoint.push(`msg:${messageId}`);
   endpoint.push(`req:${correlationId || `${channelId}:${messageId || ''}`}`);
+  if (dm) endpoint.push('dm:1');
   return endpoint.join('|');
 }
 
@@ -29,28 +90,14 @@ export function normalizeCorrelationPart(value) {
     .slice(0, 80) || 'event';
 }
 
-export function buildEventEndpoint(channelId, { messageId, kind, nonce = crypto.randomUUID(), now = Date.now() } = {}) {
+export function buildEventEndpoint(channelId, { messageId, kind, dm = false, nonce = crypto.randomUUID(), now = Date.now() } = {}) {
   const normalizedKind = normalizeCorrelationPart(kind);
   const normalizedNonce = normalizeCorrelationPart(nonce);
   return buildEndpoint(channelId, {
     messageId,
+    dm,
     correlationId: `${channelId}:${messageId || ''}:${normalizedKind}:${now}:${normalizedNonce}`
   });
-}
-
-export function parseEndpoint(endpoint) {
-  const [channelId, ...parts] = String(endpoint || '').split('|');
-  const result = { channelId, msg: null, req: null };
-
-  for (const part of parts) {
-    const colonIdx = part.indexOf(':');
-    if (colonIdx <= 0) continue;
-    const key = part.slice(0, colonIdx);
-    if (!ENDPOINT_KEYS.has(key)) continue;
-    result[key] = part.slice(colonIdx + 1);
-  }
-
-  return result;
 }
 
 function appendFilePath(content, filePath) {
@@ -131,7 +178,7 @@ export function formatMessageDeleteEvent({ username, text = '' }) {
   return `[DISCORD DELETE] ${escapeXml(username)} deleted a message${suffix}`;
 }
 
-function parseC4Response(stdout) {
+export function parseC4Response(stdout) {
   if (!stdout) return null;
   try {
     return JSON.parse(stdout.trim());
@@ -140,42 +187,95 @@ function parseC4Response(stdout) {
   }
 }
 
-function runC4Receive(channel, endpoint, content, callback) {
-  execFile('node', [
-    C4_RECEIVE,
-    '--channel', channel,
-    '--endpoint', endpoint,
-    '--json',
-    '--content', content
-  ], { encoding: 'utf8', timeout: 30000 }, callback);
-}
-
-export function sendToC4(channel, endpoint, content, onReject) {
+/**
+ * Send an inbound message to the agent via C4.
+ * The session group is derived from the endpoint and passed only when the
+ * installed Core lists --session-group (rechecked on every call, including the
+ * retry). A rejected group is never dropped and resent to the overall group,
+ * and Core's error text (written for the agent) only goes to the log.
+ * No component-side timeout kills c4-receive: killing it after Core stored the
+ * row and retrying would deliver the message twice.
+ * @param {string} channel - Channel name
+ * @param {string} endpoint - Endpoint ID
+ * @param {string} content - Message content
+ * @param {function} [onReject] - Called once when the agent will not answer this
+ *   message: with a user-facing notice to send, or with null when Core already
+ *   committed the inbound row (clean up typing/reaction only, send nothing)
+ * @param {object} [opts]
+ * @param {number} [opts.retryDelayMs=2000]
+ * @param {function} [opts.onDone] - Test hook: called with the final outcome
+ * @param {function} [opts.exec] - Test hook replacing child_process.execFile
+ */
+export function sendToC4(channel, endpoint, content, onReject, { retryDelayMs = 2000, onDone, exec = execFile } = {}) {
+  const done = (outcome) => { if (onDone) onDone(outcome); };
   if (!content) {
-    onReject?.('Internal error, please try again.');
-    return;
+    console.error('[discord] sendToC4 called with empty content');
+    onReject?.(GENERIC_REJECT_REPLY);
+    return done('rejected');
+  }
+  // Only Core with --session-group needs the group; older Core never fails here.
+  let sessionGroup = null;
+  try {
+    if (c4ReceiveSupportsOption('--session-group')) sessionGroup = sessionGroupFromEndpoint(endpoint);
+  } catch (err) {
+    // Never fall back to the overall group.
+    console.error(`[discord] cannot derive session group, not sending: ${err.message}`);
+    onReject?.(GENERIC_REJECT_REPLY);
+    return done('rejected');
   }
 
-  runC4Receive(channel, endpoint, content, (error, stdout) => {
-    if (!error) return;
+  const run = (cb) => exec(process.execPath,
+    [getC4ReceivePath(), ...buildC4ReceiveArgs({ channel, endpoint, content, sessionGroup })],
+    { encoding: 'utf8' }, cb);
 
-    const response = parseC4Response(stdout);
-    if (response?.ok === false && response.error?.message) {
-      onReject?.(response.error.message);
-      return;
+  // Structured rejection: Core's text is written for the agent, so it only goes to the log.
+  const handleRejection = (response, label) => {
+    const { code, message } = response.error;
+    const kind = classifyC4Rejection(response);
+    if (kind === 'committed') {
+      console.warn(`[discord] C4 ${label} after commit (${code}) [group=${sessionGroup}], not resending: ${message}`);
+      onReject?.(null);
+      return done('committed');
     }
+    console.warn(`[discord] C4 ${label} (${code}, ${kind}) [group=${sessionGroup}]: ${message}`);
+    onReject?.(kind === 'not_stored' ? GENERIC_REJECT_REPLY : UNCERTAIN_REPLY);
+    return done('rejected');
+  };
 
+  // Retry once only when nothing can have been stored and a retry can help:
+  // c4-receive never started, or it answered ok:false with persisted=[] and a
+  // transient code (DB_BUSY). Deterministic errors (INVALID_ARGS, ...) fail again.
+  // A call that ran without a structured answer (killed, crashed, bad output)
+  // may have committed the row, so it is never retried.
+  const retryable = (error, response) => (response?.ok === false
+    ? classifyC4Rejection(response) === 'not_stored' && RETRYABLE_C4_CODES.has(response.error?.code)
+    : neverStarted(error));
+
+  run((error, stdout) => {
+    if (!error) return done('sent');
+    const response = parseC4Response(stdout);
+    // ok:true means the row was committed even if the process then died.
+    if (response?.ok === true) return done('sent');
+    const structured = response?.ok === false && response.error?.message;
+    if (!retryable(error, response)) {
+      if (structured) return handleRejection(response, 'rejected');
+      console.error(`[discord] C4 send failed [group=${sessionGroup}], outcome unknown, not resending: ${error.message}`);
+      onReject?.(UNCERTAIN_REPLY);
+      return done('uncertain');
+    }
+    console.warn(`[discord] C4 send not stored [group=${sessionGroup}], retrying in ${retryDelayMs}ms: ${structured ? response.error.code : error.message}`);
     setTimeout(() => {
-      runC4Receive(channel, endpoint, content, (retryError, retryStdout) => {
-        if (!retryError) return;
-
+      run((retryError, retryStdout) => {
+        if (!retryError) return done('sent');
         const retryResponse = parseC4Response(retryStdout);
+        if (retryResponse?.ok === true) return done('sent');
         if (retryResponse?.ok === false && retryResponse.error?.message) {
-          onReject?.(retryResponse.error.message);
-        } else {
-          onReject?.('Internal error, please try again.');
+          return handleRejection(retryResponse, 'rejected after retry');
         }
+        console.error(`[discord] C4 send failed after retry [group=${sessionGroup}]: ${retryError.message}`);
+        onReject?.(UNCERTAIN_REPLY);
+        return done('failed');
       });
-    }, 2000);
+    }, retryDelayMs);
   });
 }

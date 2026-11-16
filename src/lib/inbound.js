@@ -1,6 +1,19 @@
 import { isDmAuthorized, resolveGuildAccess } from './auth.js';
 import { resolvePolicyChannelId, resolvePolicyThreadId } from './guild-access.js';
 import { THINKING_REACTION } from './reactions.js';
+import { buildEventEndpoint } from './c4.js';
+
+/**
+ * Endpoint for a reaction/edit/delete event. DM-ness comes from the channel
+ * (the same check as the message path), not `message.guild`: the stand-in
+ * built from cached metadata for an uncached deleted message has no `guild`.
+ */
+export function eventEndpoint(message, kind, opts = {}) {
+  const channelId = message?.channel?.id;
+  const messageId = message?.id;
+  if (!channelId || !messageId) return null;
+  return buildEventEndpoint(channelId, { ...opts, messageId, kind, dm: !!message.channel?.isDMBased?.() });
+}
 
 export const MAX_MESSAGE_METADATA_KEYS = 1000;
 
